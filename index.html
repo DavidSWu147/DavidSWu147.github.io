@@ -187,7 +187,7 @@ function ScoreTrack({ score, bonusIII }) {
         color: n < adjustedScore ? '#bbb' : n < adjustedScore + 5 && adjustedScore % 10 >= 5 ? '#bbb' : '#2a2a2a',
         textDecoration: n < adjustedScore ? 'line-through' : 'none', minWidth: 26, textAlign: 'center',
       }}, String(n).padStart(2, '0'))),
-      h('span', { style: { fontSize: 16, color: adjustedScore >= 100 ? '#c0392b' : '#ccc', position: 'relative', top: 1 } }, '💯')
+      h('span', { style: { fontSize: 16, color: adjustedScore >= 100 ? '#c0392b' : '#ccc', position: 'relative', top: -0.5 } }, '💯')
     ),
     h('div', { style: { display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' } },
       ...trackNumbers2.map(n => h('span', { key: n, style: {
@@ -197,7 +197,7 @@ function ScoreTrack({ score, bonusIII }) {
       }}, String(n).padStart(2, '0'))),
       h('span', { style: {
         fontSize: 14, color: '#c0392b', fontFamily: font, fontWeight: 'bold',
-        minWidth: 26, textAlign: 'center', position: 'relative', top: -1, marginLeft: -5.5,
+        minWidth: 26, textAlign: 'center', position: 'relative', top: -1.5, marginLeft: -5.5,
         display: 'inline-block', transform: adjustedScore >= 105 ? 'none' : 'scale(1.25)', transformOrigin: 'center center',
       }}, adjustedScore >= 105 ? adjustedScore : adjustedScore > 100 ? '\u2665' + (adjustedScore - 100) : '\u2665')
     )
