@@ -306,7 +306,8 @@ function BankDigit({
   used,
   onClick,
   selectable,
-  selected
+  selected,
+  crossOut
 }) {
   return /*#__PURE__*/React.createElement("span", {
     onClick: selectable && !used ? onClick : undefined,
@@ -319,15 +320,86 @@ function BankDigit({
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 20,
       color: used ? '#bbb' : selected ? '#c0392b' : '#2a2a2a',
-      textDecoration: used ? 'line-through' : 'none',
+      textDecoration: used && !crossOut ? 'line-through' : 'none',
       cursor: selectable && !used ? 'pointer' : 'default',
       background: selected ? '#fde8e8' : 'transparent',
       border: selected ? '2px solid #c0392b' : '2px solid transparent',
       borderRadius: 4,
       transition: 'all 0.15s',
-      fontWeight: selected ? 'bold' : 'normal'
+      fontWeight: selected ? 'bold' : 'normal',
+      position: 'relative'
     }
-  }, digit);
+  }, digit, used && crossOut && /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: 26,
+      color: '#bbb',
+      pointerEvents: 'none',
+      lineHeight: 1
+    }
+  }, "\u2715"));
+}
+
+// --- Cell Hint Calculations ---
+function getSequenceHints(row) {
+  // For each empty cell in a partially filled sequence row, determine which digits can go there
+  const hints = [null, null, null, null];
+  const filled = row.map((c, i) => c !== null ? {
+    digit: c,
+    pos: i
+  } : null).filter(Boolean);
+  if (filled.length === 0 || filled.length === 4) return hints;
+  for (let colIdx = 0; colIdx < 4; colIdx++) {
+    if (row[colIdx] !== null) continue;
+    const candidates = [];
+    for (let d = 0; d <= 9; d++) {
+      if (canExtendSequence(filled, d, colIdx)) candidates.push(d);
+    }
+    if (candidates.length > 0) hints[colIdx] = candidates;
+  }
+  return hints;
+}
+function getMatchingHints(row) {
+  const hints = [null, null, null, null];
+  const filled = row.filter(c => c !== null);
+  if (filled.length === 0 || filled.length === 4) return hints;
+  const target = filled[0];
+  for (let colIdx = 0; colIdx < 4; colIdx++) {
+    if (row[colIdx] !== null) continue;
+    hints[colIdx] = [target];
+  }
+  return hints;
+}
+function getLadderHints(row, laxPlacement) {
+  const hints = [null, null, null, null];
+  const filled = row.filter(c => c !== null);
+  if (filled.length === 0 || filled.length === 4) return hints;
+  for (let colIdx = 0; colIdx < 4; colIdx++) {
+    if (row[colIdx] !== null) continue;
+    const candidates = [];
+    for (let d = 0; d <= 9; d++) {
+      const newRow = [...row];
+      newRow[colIdx] = d;
+      if (laxPlacement ? isValidLaxLadderPlacement(newRow) : isValidLadderPlacement(newRow)) {
+        candidates.push(d);
+      }
+    }
+    if (candidates.length > 0) hints[colIdx] = candidates;
+  }
+  return hints;
+}
+function getCellHints(category, row, laxPlacement) {
+  if (category === 'sequence') return getSequenceHints(row);
+  if (category === 'matching') return getMatchingHints(row);
+  if (category === 'ladder') return getLadderHints(row, laxPlacement);
+  return [null, null, null, null];
 }
 
 // --- Grid Cell ---
@@ -335,7 +407,8 @@ function GridCell({
   value,
   onClick,
   clickable,
-  highlight
+  highlight,
+  hints
 }) {
   return /*#__PURE__*/React.createElement("div", {
     onClick: clickable ? onClick : undefined,
@@ -351,21 +424,66 @@ function GridCell({
       color: '#2a2a2a',
       background: clickable ? '#fffde6' : highlight ? '#e8f5e9' : '#fff',
       cursor: clickable ? 'pointer' : 'default',
-      transition: 'background 0.15s'
+      transition: 'background 0.15s',
+      position: 'relative'
     }
-  }, value !== null ? value : '');
+  }, value !== null ? value : '', value === null && hints && hints.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: 'absolute',
+      top: 1,
+      left: 0,
+      right: 0,
+      display: 'flex',
+      justifyContent: hints.length === 1 ? 'center' : 'space-between',
+      padding: '0 3px',
+      fontSize: 11,
+      color: '#999',
+      fontWeight: 'normal',
+      lineHeight: '12px',
+      pointerEvents: 'none'
+    }
+  }, hints.sort((a, b) => a - b).map((d, i) => /*#__PURE__*/React.createElement("span", {
+    key: i
+  }, d))));
 }
 
 // --- Score Track ---
 function ScoreTrack({
   score,
-  bonusIII
+  bonusIII,
+  crossOut
 }) {
   const adjustedScore = score + (bonusIII ? 5 : 0);
   const trackNumbers = [];
   for (let i = 0; i <= 90; i += 10) trackNumbers.push(i);
   const trackNumbers2 = [];
   for (let i = 5; i <= 95; i += 10) trackNumbers2.push(i);
+  const passedStyle = n => ({
+    fontFamily: "'Special Elite', 'Courier New', monospace",
+    fontSize: 14,
+    color: n < adjustedScore ? '#bbb' : '#2a2a2a',
+    textDecoration: n < adjustedScore && !crossOut ? 'line-through' : 'none',
+    minWidth: 26,
+    textAlign: 'center',
+    position: 'relative',
+    display: 'inline-block'
+  });
+  const xOverlay = /*#__PURE__*/React.createElement("span", {
+    style: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: 26,
+      color: '#bbb',
+      pointerEvents: 'none',
+      lineHeight: 1
+    }
+  }, "\u2715");
   return /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 8
@@ -381,14 +499,10 @@ function ScoreTrack({
   }, trackNumbers.map(n => /*#__PURE__*/React.createElement("span", {
     key: n,
     style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 14,
-      color: n < adjustedScore ? '#bbb' : n < adjustedScore + 5 && adjustedScore % 10 >= 5 ? '#bbb' : '#2a2a2a',
-      textDecoration: n < adjustedScore ? 'line-through' : 'none',
-      minWidth: 26,
-      textAlign: 'center'
+      ...passedStyle(n),
+      color: n < adjustedScore ? '#bbb' : n < adjustedScore + 5 && adjustedScore % 10 >= 5 ? '#bbb' : '#2a2a2a'
     }
-  }, String(n).padStart(2, '0'))), /*#__PURE__*/React.createElement("span", {
+  }, String(n).padStart(2, '0'), n < adjustedScore && crossOut && xOverlay)), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 16,
       color: adjustedScore >= 100 ? '#c0392b' : '#ccc',
@@ -404,30 +518,23 @@ function ScoreTrack({
     }
   }, trackNumbers2.map(n => /*#__PURE__*/React.createElement("span", {
     key: n,
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 14,
-      color: n < adjustedScore ? '#bbb' : '#2a2a2a',
-      textDecoration: n < adjustedScore ? 'line-through' : 'none',
-      minWidth: 26,
-      textAlign: 'center'
-    }
-  }, String(n).padStart(2, '0'))), /*#__PURE__*/React.createElement("span", {
+    style: passedStyle(n)
+  }, String(n).padStart(2, '0'), n < adjustedScore && crossOut && xOverlay)), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 14,
       color: '#c0392b',
       fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontWeight: 'bold',
+      fontWeight: adjustedScore > 100 ? 'normal' : 'bold',
       minWidth: 26,
       textAlign: 'center',
       position: 'relative',
       top: -1.5,
       marginLeft: -5.5,
       display: 'inline-block',
-      transform: adjustedScore >= 105 ? 'none' : 'scale(1.25)',
+      transform: adjustedScore > 100 ? 'none' : 'scale(1.25)',
       transformOrigin: 'center center'
     }
-  }, adjustedScore >= 105 ? adjustedScore : adjustedScore > 100 ? `♥${adjustedScore - 100}` : '♥')));
+  }, adjustedScore > 100 ? adjustedScore : '♥')));
 }
 
 // --- Toggle Switch Component ---
@@ -451,7 +558,9 @@ function ToggleSwitch({
       fontFamily: "'Special Elite', 'Courier New', monospace",
       color: !checked ? '#2a2a2a' : '#aaa',
       fontWeight: !checked ? 'bold' : 'normal',
-      transition: 'all 0.15s'
+      transition: 'all 0.15s',
+      minWidth: 120,
+      textAlign: 'left'
     }
   }, leftLabel), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -491,6 +600,8 @@ function Simili() {
   const [showSettings, setShowSettings] = useState(false);
   const [wideLayout, setWideLayout] = useState(false);
   const [verticalCategories, setVerticalCategories] = useState(false);
+  const [cellHints, setCellHints] = useState(false);
+  const [crossOut, setCrossOut] = useState(false);
   const [twoPlayer, setTwoPlayer] = useState(false);
   const [matchPlay, setMatchPlay] = useState(false);
   const [classicMode, setClassicMode] = useState(false);
@@ -869,7 +980,8 @@ function Simili() {
     }
   }, /*#__PURE__*/React.createElement(ScoreTrack, {
     score: totalScore(grids, laxPlacement),
-    bonusIII: seqBonusIII
+    bonusIII: seqBonusIII,
+    crossOut: crossOut
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 16,
@@ -1017,7 +1129,8 @@ function Simili() {
         used: b.used,
         selected: selectedBankIndices.includes(globalIdx),
         selectable: (phase === 'book' && (bonusBookPhase || bookingsThisRound < maxBooking) || phase === 'endgame-bonus' && bonusBookPhase) && !b.used,
-        onClick: () => toggleBankSelection(globalIdx)
+        onClick: () => toggleBankSelection(globalIdx),
+        crossOut: crossOut
       });
     }) : /*#__PURE__*/React.createElement("span", {
       style: {
@@ -1116,6 +1229,7 @@ function Simili() {
         }
         return true;
       };
+      const rowHints = cellHints ? getCellHints(cat, row, laxPlacement) : null;
       return /*#__PURE__*/React.createElement("div", {
         key: rowIdx,
         style: {
@@ -1129,7 +1243,8 @@ function Simili() {
         value: cell,
         clickable: canPlaceInCell(colIdx),
         highlight: scoringCells.has(colIdx),
-        onClick: () => handleBookDigit(cat, rowIdx, colIdx)
+        onClick: () => handleBookDigit(cat, rowIdx, colIdx),
+        hints: rowHints ? rowHints[colIdx] : null
       })), rowScore > 0 && /*#__PURE__*/React.createElement("span", {
         style: {
           fontSize: 13,
@@ -1420,7 +1535,7 @@ function Simili() {
         justifyContent: 'center'
       }
     }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => {},
+      onClick: () => window.open('SIMILI_RULES.pdf', 'simili_rules'),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 13,
@@ -1502,6 +1617,24 @@ function Simili() {
     rightLabel: "Stacked"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: crossOut,
+    onChange: setCrossOut,
+    leftLabel: "Strikethrough",
+    rightLabel: "Cross Out"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: cellHints,
+    onChange: setCellHints,
+    leftLabel: "Cell Hints Off",
+    rightLabel: "Cell Hints On"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
       fontSize: 11,
       fontWeight: 'bold',
       opacity: 0.5,
@@ -1545,8 +1678,8 @@ function Simili() {
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: classicMode,
     onChange: setClassicMode,
-    leftLabel: "Modern",
-    rightLabel: "Classic"
+    leftLabel: "Modern Version",
+    rightLabel: "Classic Version"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8
@@ -1554,8 +1687,8 @@ function Simili() {
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: laxPlacement,
     onChange: setLaxPlacement,
-    leftLabel: "Strict placement",
-    rightLabel: "Lax placement"
+    leftLabel: "Strict Placement",
+    rightLabel: "Lax Placement"
   })))))));
 }
 
