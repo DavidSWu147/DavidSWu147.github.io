@@ -402,6 +402,72 @@ function getCellHints(category, row, laxPlacement) {
   return [null, null, null, null];
 }
 
+// --- Unwinnable Detection ---
+function isUnwinnableSequence(bank) {
+  if (bank.length !== 30) return false;
+  const counts = Array(10).fill(0);
+  for (const b of bank) counts[b.digit]++;
+  const distinct = counts.filter(c => c > 0).length;
+
+  // Case 1: All same parity (5 distinct digits)
+  // All 5 even or all 5 odd, four quantities ≡ 3 mod 4, one ≡ 2 mod 4
+  if (distinct === 5) {
+    const evens = [0, 2, 4, 6, 8];
+    const odds = [1, 3, 5, 7, 9];
+    const allEven = evens.every(d => counts[d] > 0) && odds.every(d => counts[d] === 0);
+    const allOdd = odds.every(d => counts[d] > 0) && evens.every(d => counts[d] === 0);
+    if (allEven || allOdd) {
+      const vals = (allEven ? evens : odds).map(d => counts[d]);
+      const mod4 = vals.map(v => v % 4);
+      const count3 = mod4.filter(m => m === 3).length;
+      const count2 = mod4.filter(m => m === 2).length;
+      if (count3 === 4 && count2 === 1) return true;
+    }
+  }
+
+  // Case 2: Mixed parity (6 distinct digits)
+  // The 15 patterns of 6 digits on 0-9 circle with no 3 consecutive and exactly 2 adjacent pairs.
+  // Each adjacent pair must contain exactly one singleton (count=1) to block Ladders.
+  // The remaining 4 digits (non-singletons) must each have count ≡ 3 mod 4 to block 5x 4-Matching.
+  if (distinct === 6) {
+    const unwinnablePatterns = [[0, 1, 3, 4, 6, 8], [0, 1, 3, 5, 6, 8], [0, 1, 3, 5, 7, 8], [0, 2, 3, 5, 6, 8], [0, 2, 3, 5, 7, 8], [0, 2, 3, 5, 7, 9], [0, 2, 4, 5, 7, 8], [0, 2, 4, 5, 7, 9], [0, 2, 4, 6, 7, 9], [1, 2, 4, 5, 7, 9], [1, 2, 4, 6, 7, 9], [1, 2, 4, 6, 8, 9], [1, 3, 4, 6, 7, 9], [1, 3, 4, 6, 8, 9], [1, 3, 5, 6, 8, 9]];
+    const presentDigits = [];
+    for (let d = 0; d < 10; d++) if (counts[d] > 0) presentDigits.push(d);
+    for (const pattern of unwinnablePatterns) {
+      // Check if the present digits match this pattern
+      if (pattern.length !== presentDigits.length) continue;
+      if (!pattern.every((d, i) => d === presentDigits[i])) continue;
+
+      // Find the adjacent pairs in this pattern (on 0-9 circle)
+      const adjacentPairs = [];
+      for (let i = 0; i < pattern.length; i++) {
+        for (let j = i + 1; j < pattern.length; j++) {
+          const diff = Math.abs(pattern[i] - pattern[j]);
+          if (diff === 1 || diff === 9) adjacentPairs.push([pattern[i], pattern[j]]);
+        }
+      }
+
+      // Each adjacent pair must have exactly one singleton
+      let laddersBlocked = true;
+      for (const [a, b] of adjacentPairs) {
+        const aSingle = counts[a] === 1;
+        const bSingle = counts[b] === 1;
+        if (!(aSingle && !bSingle || !aSingle && bSingle)) {
+          laddersBlocked = false;
+          break;
+        }
+      }
+      if (!laddersBlocked) continue;
+
+      // The 4 non-singleton digits must each be ≡ 3 mod 4
+      const nonSingletons = pattern.filter(d => counts[d] > 1);
+      if (nonSingletons.length !== 4) continue;
+      if (nonSingletons.every(d => counts[d] % 4 === 3)) return true;
+    }
+  }
+  return false;
+}
+
 // --- Grid Cell ---
 function GridCell({
   value,
@@ -607,6 +673,22 @@ function Simili() {
   const [classicMode, setClassicMode] = useState(false);
   const [laxPlacement, setLaxPlacement] = useState(false);
 
+  // Seed: parse from URL on mount, consumed only for first game
+  const [seedRolls, setSeedRolls] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const seed = params.get('seed');
+      if (seed && /^\d{30}$/.test(seed)) {
+        const rolls = [];
+        for (let i = 0; i < 30; i += 3) {
+          rolls.push([parseInt(seed[i]), parseInt(seed[i + 1]), parseInt(seed[i + 2])]);
+        }
+        return rolls;
+      }
+    } catch (e) {}
+    return null;
+  });
+
   // Game state
   const [round, setRound] = useState(0); // 0-indexed, 0-9
   const [phase, setPhase] = useState('pregame'); // 'pregame' | 'choose' | 'rolling' | 'book' | 'gameover'
@@ -674,7 +756,7 @@ function Simili() {
     // Lock in max booking based on state BEFORE this round's roll
     const bonusIActive = hasSequenceBonusI(grids);
     setMaxBooking(chosenCategory === 'sequence' && bonusIActive ? MAX_BOOK_SEQ_BONUS : MAX_BOOK_DEFAULT);
-    const roll = [Math.floor(Math.random() * 10), Math.floor(Math.random() * 10), Math.floor(Math.random() * 10)];
+    const roll = seedRolls && seedRolls[round] ? seedRolls[round] : [Math.floor(Math.random() * 10), Math.floor(Math.random() * 10), Math.floor(Math.random() * 10)];
     setCurrentRoll(roll);
     setSpinning(true);
     setReelsStopped(0);
@@ -881,6 +963,7 @@ function Simili() {
     setUndoStack([]);
     setMaxBooking(MAX_BOOK_DEFAULT);
     setAbandoned(false);
+    setSeedRolls(null);
   };
 
   // Determine which categories bonus book can go into
@@ -1477,45 +1560,49 @@ function Simili() {
     style: {
       color: seqBonusIII ? '#27ae60' : '#999'
     }
-  }, "III ", seqBonusIII ? '✓ (+5)' : '○')), phase === 'gameover' && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 20,
-      padding: 24,
-      textAlign: 'center',
-      background: !abandoned && currentScore >= 100 ? '#e8f5e9' : '#ffeaa7',
-      border: `2px solid ${!abandoned && currentScore >= 100 ? '#27ae60' : '#f39c12'}`,
-      borderRadius: 8
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 28,
-      fontWeight: 'bold',
-      marginBottom: 8
-    }
-  }, !abandoned && currentScore >= 100 ? '🎉 YOU WIN!' : 'Game Over'), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 20,
-      marginBottom: 4
-    }
-  }, abandoned ? 'Game was Abandoned' : /*#__PURE__*/React.createElement(React.Fragment, null, "Final Score: ", currentScore, currentScore > 100 && /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: redInk
-    }
-  }, " (\u2665", currentScore - 100, ")"))), /*#__PURE__*/React.createElement("button", {
-    onClick: handleReset,
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 18,
-      padding: '10px 32px',
-      background: '#2a2a2a',
-      color: '#fff',
-      border: 'none',
-      borderRadius: 6,
-      cursor: 'pointer',
-      marginTop: 16,
-      letterSpacing: 2
-    }
-  }, "PLAY AGAIN")), /*#__PURE__*/React.createElement("div", {
+  }, "III ", seqBonusIII ? '✓ (+5)' : '○')), phase === 'gameover' && (() => {
+    const won = !abandoned && currentScore >= 100;
+    const unwinnable = !abandoned && !won && bank.length === 30 && isUnwinnableSequence(bank);
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 20,
+        padding: 24,
+        textAlign: 'center',
+        background: won ? '#e8f5e9' : '#ffeaa7',
+        border: `2px solid ${won ? '#27ae60' : '#f39c12'}`,
+        borderRadius: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 28,
+        fontWeight: 'bold',
+        marginBottom: 8
+      }
+    }, won ? '🎉 YOU WIN!' : unwinnable ? 'This game was impossible to win!' : 'Game Over'), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        marginBottom: 4
+      }
+    }, abandoned ? 'Game was Abandoned' : /*#__PURE__*/React.createElement(React.Fragment, null, "Final Score: ", currentScore, currentScore > 100 && /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: redInk
+      }
+    }, " (\u2665", currentScore - 100, ")"))), /*#__PURE__*/React.createElement("button", {
+      onClick: handleReset,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 18,
+        padding: '10px 32px',
+        background: '#2a2a2a',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 6,
+        cursor: 'pointer',
+        marginTop: 16,
+        letterSpacing: 2
+      }
+    }, "PLAY AGAIN"));
+  })(), /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
       marginTop: 12,
