@@ -1,29 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SIMILI - A Dice Game</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Special Elite', 'Courier New', monospace; }
-  </style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 </head>
-<body>
+<body style="margin: 0; padding: 0;">
   <div id="root"></div>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script>const { useState, useEffect, useRef, useCallback } = React;</script>
   <script>
-const {
-  useState,
-  useEffect,
-  useRef,
-  useCallback
-} = React;
-
 // ============================================================
 // SIMILI - A Dice Game by David Wu
 // ============================================================
@@ -34,12 +21,11 @@ const MAX_ROWS = 5;
 const ROW_SIZE = 4;
 const MAX_BOOK_DEFAULT = 3;
 const MAX_BOOK_SEQ_BONUS = 4;
+const MATCH_GAMES = 4;
 
 // --- Utility Functions ---
 function isValidSequence(digits) {
-  // Check if digits form a valid ascending or descending sequence (with wrap)
   if (digits.length < 2) return true;
-  // Check ascending
   let asc = true;
   for (let i = 1; i < digits.length; i++) {
     if ((digits[i - 1] + 1) % 10 !== digits[i]) {
@@ -47,7 +33,6 @@ function isValidSequence(digits) {
       break;
     }
   }
-  // Check descending
   let desc = true;
   for (let i = 1; i < digits.length; i++) {
     if ((digits[i - 1] - 1 + 10) % 10 !== digits[i]) {
@@ -58,31 +43,16 @@ function isValidSequence(digits) {
   return asc || desc;
 }
 function canExtendSequence(existing, newDigit, position) {
-  // existing is array of {digit, pos} already in the row (pos = cell index 0-3)
-  // Check if placing newDigit at position is consistent with ANY valid ascending 
-  // or descending sequence (with wrap) that could fill the 4-cell row.
   const all = [...existing, {
     digit: newDigit,
     pos: position
   }];
   if (all.length < 2) return true;
-
-  // For an ascending sequence starting with value `start` at cell 0:
-  //   cell i has value (start + i) % 10
-  // For a descending sequence starting with value `start` at cell 0:
-  //   cell i has value (start - i + 10) % 10
-  // 
-  // Check ascending: all placed digits must satisfy digit === (start + pos) % 10
-  //   From any placed digit: start = (digit - pos + 10) % 10
-  //   All placed digits must agree on the same start value.
   const ascStarts = all.map(({
     digit,
     pos
   }) => (digit - pos + 40) % 10);
   const ascValid = ascStarts.every(s => s === ascStarts[0]);
-
-  // Check descending: all placed digits must satisfy digit === (start - pos + 10) % 10
-  //   From any placed digit: start = (digit + pos) % 10
   const descStarts = all.map(({
     digit,
     pos
@@ -91,24 +61,14 @@ function canExtendSequence(existing, newDigit, position) {
   return ascValid || descValid;
 }
 function isValidLadderPlacement(row) {
-  // Ladder: cells [0,1] are one pair, cells [2,3] are the other pair.
-  // Complete ladder: XXYY where Y = X±1 (wraps 9↔0).
-  // Validate partial placements based on position.
   const a = row[0],
     b = row[1],
     c = row[2],
     d = row[3];
-
-  // Check left pair consistency (cells 0 and 1 must match if both present)
   if (a !== null && b !== null && a !== b) return false;
-  // Check right pair consistency (cells 2 and 3 must match if both present)
   if (c !== null && d !== null && c !== d) return false;
-
-  // Get the value of each pair (if any digit is placed)
-  const leftVal = a !== null ? a : b; // could be null if neither placed
+  const leftVal = a !== null ? a : b;
   const rightVal = c !== null ? c : d;
-
-  // If both pairs have at least one digit, check ±1 relationship
   if (leftVal !== null && rightVal !== null) {
     const diff = Math.abs(leftVal - rightVal);
     if (diff !== 1 && diff !== 9) return false;
@@ -116,26 +76,17 @@ function isValidLadderPlacement(row) {
   return true;
 }
 function isValidLaxLadderPlacement(row) {
-  // Lax: digits can go in any cell, but must form a valid XXYY pattern.
-  // Validate that all placed digits are consistent with some valid ladder.
   const filled = row.filter(c => c !== null);
   if (filled.length === 0) return true;
   if (filled.length === 1) return true;
-
-  // Get distinct values
   const distinct = [...new Set(filled)];
   if (distinct.length > 2) return false;
   if (distinct.length === 1) {
-    // All same digit so far — valid if we have at most 2
     if (filled.length > 2) return false;
     return true;
   }
-
-  // Two distinct values — check they are adjacent (±1 with wrap)
   const diff = Math.abs(distinct[0] - distinct[1]);
   if (diff !== 1 && diff !== 9) return false;
-
-  // Each value can appear at most twice
   const count0 = filled.filter(d => d === distinct[0]).length;
   const count1 = filled.filter(d => d === distinct[1]).length;
   if (count0 > 2 || count1 > 2) return false;
@@ -145,9 +96,7 @@ function scoreLadderRow(cells, laxPlacement = false) {
   const filled = cells.filter(c => c !== null);
   if (filled.length !== 4) return 0;
   if (laxPlacement) {
-    // Any arrangement of XXYY where Y = X±1 (wraps 9↔0)
     const sorted = [...filled].sort((a, b) => a - b);
-    // Should have exactly two pairs
     if (sorted[0] === sorted[1] && sorted[2] === sorted[3] && sorted[0] !== sorted[2]) {
       const diff = Math.abs(sorted[0] - sorted[2]);
       if (diff === 1 || diff === 9) return 20;
@@ -160,13 +109,10 @@ function scoreSequenceRow(cells) {
   const filled = cells.filter(c => c !== null);
   if (filled.length >= 4 && isValidSequence(filled)) return 15;
   if (filled.length >= 3) {
-    // Check contiguous groups of 3
     const positions = cells.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
-    // For 3-sequence, need 3 contiguous filled cells that form a valid sequence
     for (let start = 0; start <= positions.length - 3; start++) {
       const group = positions.slice(start, start + 3);
       if (group[2] - group[0] === 2) {
-        // contiguous
         const digits = group.map(i => cells[i]);
         if (isValidSequence(digits)) return 10;
       }
@@ -182,11 +128,10 @@ function scoreMatchingRow(cells, laxPlacement = false) {
   if (filled.length >= 4) return 20;
   if (filled.length >= 3) {
     if (laxPlacement) return 15;
-    // Strict: need 3 contiguous matching cells
     const positions = cells.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
     for (let start = 0; start <= positions.length - 3; start++) {
       const group = positions.slice(start, start + 3);
-      if (group[2] - group[0] === 2) return 15; // contiguous
+      if (group[2] - group[0] === 2) return 15;
     }
     return 0;
   }
@@ -226,14 +171,146 @@ function hasSequenceBonusIII(grids) {
   return countCompletedSequences4(grids) >= 5;
 }
 function hasModernBonusIII(grids, laxPlacement = false) {
-  // Modern: any category completely filled with max-scoring rows
   if (countCompletedSequences4(grids) >= 5) return true;
   if (grids.matching.every(row => scoreMatchingRow(row, laxPlacement) >= 20)) return true;
   if (grids.ladder.every(row => scoreLadderRow(row, laxPlacement) >= 20)) return true;
   return false;
 }
-function allRowsFilled(grids, cat) {
-  return grids[cat].every(row => row.every(c => c !== null));
+
+// --- Cell Hint Calculations ---
+function getSequenceHints(row) {
+  const hints = [null, null, null, null];
+  const filled = row.map((c, i) => c !== null ? {
+    digit: c,
+    pos: i
+  } : null).filter(Boolean);
+  if (filled.length === 0 || filled.length === 4) return hints;
+  for (let colIdx = 0; colIdx < 4; colIdx++) {
+    if (row[colIdx] !== null) continue;
+    const candidates = [];
+    for (let d = 0; d <= 9; d++) {
+      if (canExtendSequence(filled, d, colIdx)) candidates.push(d);
+    }
+    if (candidates.length > 0) hints[colIdx] = candidates;
+  }
+  return hints;
+}
+function getMatchingHints(row) {
+  const hints = [null, null, null, null];
+  const filled = row.filter(c => c !== null);
+  if (filled.length === 0 || filled.length === 4) return hints;
+  const target = filled[0];
+  for (let colIdx = 0; colIdx < 4; colIdx++) {
+    if (row[colIdx] !== null) continue;
+    hints[colIdx] = [target];
+  }
+  return hints;
+}
+function getLadderHints(row, laxPlacement) {
+  const hints = [null, null, null, null];
+  const filled = row.filter(c => c !== null);
+  if (filled.length === 0 || filled.length === 4) return hints;
+  for (let colIdx = 0; colIdx < 4; colIdx++) {
+    if (row[colIdx] !== null) continue;
+    const candidates = [];
+    for (let d = 0; d <= 9; d++) {
+      const newRow = [...row];
+      newRow[colIdx] = d;
+      if (laxPlacement ? isValidLaxLadderPlacement(newRow) : isValidLadderPlacement(newRow)) candidates.push(d);
+    }
+    if (candidates.length > 0) hints[colIdx] = candidates;
+  }
+  return hints;
+}
+function getCellHints(category, row, laxPlacement) {
+  if (category === 'sequence') return getSequenceHints(row);
+  if (category === 'matching') return getMatchingHints(row);
+  if (category === 'ladder') return getLadderHints(row, laxPlacement);
+  return [null, null, null, null];
+}
+
+// --- Unwinnable Detection ---
+function isUnwinnableSequence(bank) {
+  if (bank.length !== 30) return false;
+  const counts = Array(10).fill(0);
+  for (const b of bank) counts[b.digit]++;
+  const distinct = counts.filter(c => c > 0).length;
+  if (distinct === 5) {
+    const evens = [0, 2, 4, 6, 8];
+    const odds = [1, 3, 5, 7, 9];
+    const allEven = evens.every(d => counts[d] > 0) && odds.every(d => counts[d] === 0);
+    const allOdd = odds.every(d => counts[d] > 0) && evens.every(d => counts[d] === 0);
+    if (allEven || allOdd) {
+      const vals = (allEven ? evens : odds).map(d => counts[d]);
+      const mod4 = vals.map(v => v % 4);
+      if (mod4.filter(m => m === 3).length === 4 && mod4.filter(m => m === 2).length === 1) return true;
+    }
+  }
+  if (distinct === 6) {
+    const unwinnablePatterns = [[0, 1, 3, 4, 6, 8], [0, 1, 3, 5, 6, 8], [0, 1, 3, 5, 7, 8], [0, 2, 3, 5, 6, 8], [0, 2, 3, 5, 7, 8], [0, 2, 3, 5, 7, 9], [0, 2, 4, 5, 7, 8], [0, 2, 4, 5, 7, 9], [0, 2, 4, 6, 7, 9], [1, 2, 4, 5, 7, 9], [1, 2, 4, 6, 7, 9], [1, 2, 4, 6, 8, 9], [1, 3, 4, 6, 7, 9], [1, 3, 4, 6, 8, 9], [1, 3, 5, 6, 8, 9]];
+    const presentDigits = [];
+    for (let d = 0; d < 10; d++) if (counts[d] > 0) presentDigits.push(d);
+    for (const pattern of unwinnablePatterns) {
+      if (pattern.length !== presentDigits.length) continue;
+      if (!pattern.every((d, i) => d === presentDigits[i])) continue;
+      const adjacentPairs = [];
+      for (let i = 0; i < pattern.length; i++) for (let j = i + 1; j < pattern.length; j++) {
+        const diff = Math.abs(pattern[i] - pattern[j]);
+        if (diff === 1 || diff === 9) adjacentPairs.push([pattern[i], pattern[j]]);
+      }
+      let laddersBlocked = true;
+      for (const [a, b] of adjacentPairs) {
+        const aSingle = counts[a] === 1,
+          bSingle = counts[b] === 1;
+        if (!(aSingle && !bSingle || !aSingle && bSingle)) {
+          laddersBlocked = false;
+          break;
+        }
+      }
+      if (!laddersBlocked) continue;
+      const nonSingletons = pattern.filter(d => counts[d] > 1);
+      if (nonSingletons.length !== 4) continue;
+      if (nonSingletons.every(d => counts[d] % 4 === 3)) return true;
+    }
+  }
+  return false;
+}
+
+// --- Helper: Create fresh player state ---
+function createPlayerState() {
+  return {
+    grids: {
+      sequence: Array.from({
+        length: MAX_ROWS
+      }, () => Array(ROW_SIZE).fill(null)),
+      matching: Array.from({
+        length: MAX_ROWS
+      }, () => Array(ROW_SIZE).fill(null)),
+      ladder: Array.from({
+        length: MAX_ROWS
+      }, () => Array(ROW_SIZE).fill(null))
+    },
+    bankUsed: [],
+    selectedBankIndices: [],
+    chosenCategory: null,
+    bookingsThisRound: 0,
+    maxBooking: MAX_BOOK_DEFAULT,
+    seqBonusIIAUsed: false,
+    seqBonusIIBUsed: false,
+    seqBonusIIAUnlocked: false,
+    seqBonusIIBUnlocked: false,
+    seqBonusIIACategory: null,
+    seqBonusIIBCategory: null,
+    bonusBookPhase: false,
+    bonusBookSource: null,
+    undoStack: [],
+    roundDone: false
+  };
+}
+function getPlayerFinalScore(ps, classicMode, laxPlacement) {
+  const grids = ps.grids;
+  const seqBonusIII = classicMode ? hasSequenceBonusIII(grids) : hasModernBonusIII(grids, laxPlacement);
+  return totalScore(grids, laxPlacement) + (seqBonusIII ? 5 : 0);
 }
 
 // --- Slot Machine Reel Component ---
@@ -248,9 +325,7 @@ function SlotReel({
   const intervalRef = useRef(null);
   const timeoutRef = useRef(null);
   useEffect(() => {
-    if (targetDigit === null) {
-      setIsStopped(false);
-    }
+    if (targetDigit === null) setIsStopped(false);
   }, [targetDigit]);
   useEffect(() => {
     if (spinning) {
@@ -300,7 +375,7 @@ function SlotReel({
   }, spinning || isStopped ? isStopped ? targetDigit : displayDigit : '?'));
 }
 
-// --- Bank Display ---
+// --- Bank Digit ---
 function BankDigit({
   digit,
   used,
@@ -345,127 +420,6 @@ function BankDigit({
       lineHeight: 1
     }
   }, "\u2715"));
-}
-
-// --- Cell Hint Calculations ---
-function getSequenceHints(row) {
-  // For each empty cell in a partially filled sequence row, determine which digits can go there
-  const hints = [null, null, null, null];
-  const filled = row.map((c, i) => c !== null ? {
-    digit: c,
-    pos: i
-  } : null).filter(Boolean);
-  if (filled.length === 0 || filled.length === 4) return hints;
-  for (let colIdx = 0; colIdx < 4; colIdx++) {
-    if (row[colIdx] !== null) continue;
-    const candidates = [];
-    for (let d = 0; d <= 9; d++) {
-      if (canExtendSequence(filled, d, colIdx)) candidates.push(d);
-    }
-    if (candidates.length > 0) hints[colIdx] = candidates;
-  }
-  return hints;
-}
-function getMatchingHints(row) {
-  const hints = [null, null, null, null];
-  const filled = row.filter(c => c !== null);
-  if (filled.length === 0 || filled.length === 4) return hints;
-  const target = filled[0];
-  for (let colIdx = 0; colIdx < 4; colIdx++) {
-    if (row[colIdx] !== null) continue;
-    hints[colIdx] = [target];
-  }
-  return hints;
-}
-function getLadderHints(row, laxPlacement) {
-  const hints = [null, null, null, null];
-  const filled = row.filter(c => c !== null);
-  if (filled.length === 0 || filled.length === 4) return hints;
-  for (let colIdx = 0; colIdx < 4; colIdx++) {
-    if (row[colIdx] !== null) continue;
-    const candidates = [];
-    for (let d = 0; d <= 9; d++) {
-      const newRow = [...row];
-      newRow[colIdx] = d;
-      if (laxPlacement ? isValidLaxLadderPlacement(newRow) : isValidLadderPlacement(newRow)) {
-        candidates.push(d);
-      }
-    }
-    if (candidates.length > 0) hints[colIdx] = candidates;
-  }
-  return hints;
-}
-function getCellHints(category, row, laxPlacement) {
-  if (category === 'sequence') return getSequenceHints(row);
-  if (category === 'matching') return getMatchingHints(row);
-  if (category === 'ladder') return getLadderHints(row, laxPlacement);
-  return [null, null, null, null];
-}
-
-// --- Unwinnable Detection ---
-function isUnwinnableSequence(bank) {
-  if (bank.length !== 30) return false;
-  const counts = Array(10).fill(0);
-  for (const b of bank) counts[b.digit]++;
-  const distinct = counts.filter(c => c > 0).length;
-
-  // Case 1: All same parity (5 distinct digits)
-  // All 5 even or all 5 odd, four quantities ≡ 3 mod 4, one ≡ 2 mod 4
-  if (distinct === 5) {
-    const evens = [0, 2, 4, 6, 8];
-    const odds = [1, 3, 5, 7, 9];
-    const allEven = evens.every(d => counts[d] > 0) && odds.every(d => counts[d] === 0);
-    const allOdd = odds.every(d => counts[d] > 0) && evens.every(d => counts[d] === 0);
-    if (allEven || allOdd) {
-      const vals = (allEven ? evens : odds).map(d => counts[d]);
-      const mod4 = vals.map(v => v % 4);
-      const count3 = mod4.filter(m => m === 3).length;
-      const count2 = mod4.filter(m => m === 2).length;
-      if (count3 === 4 && count2 === 1) return true;
-    }
-  }
-
-  // Case 2: Mixed parity (6 distinct digits)
-  // The 15 patterns of 6 digits on 0-9 circle with no 3 consecutive and exactly 2 adjacent pairs.
-  // Each adjacent pair must contain exactly one singleton (count=1) to block Ladders.
-  // The remaining 4 digits (non-singletons) must each have count ≡ 3 mod 4 to block 5x 4-Matching.
-  if (distinct === 6) {
-    const unwinnablePatterns = [[0, 1, 3, 4, 6, 8], [0, 1, 3, 5, 6, 8], [0, 1, 3, 5, 7, 8], [0, 2, 3, 5, 6, 8], [0, 2, 3, 5, 7, 8], [0, 2, 3, 5, 7, 9], [0, 2, 4, 5, 7, 8], [0, 2, 4, 5, 7, 9], [0, 2, 4, 6, 7, 9], [1, 2, 4, 5, 7, 9], [1, 2, 4, 6, 7, 9], [1, 2, 4, 6, 8, 9], [1, 3, 4, 6, 7, 9], [1, 3, 4, 6, 8, 9], [1, 3, 5, 6, 8, 9]];
-    const presentDigits = [];
-    for (let d = 0; d < 10; d++) if (counts[d] > 0) presentDigits.push(d);
-    for (const pattern of unwinnablePatterns) {
-      // Check if the present digits match this pattern
-      if (pattern.length !== presentDigits.length) continue;
-      if (!pattern.every((d, i) => d === presentDigits[i])) continue;
-
-      // Find the adjacent pairs in this pattern (on 0-9 circle)
-      const adjacentPairs = [];
-      for (let i = 0; i < pattern.length; i++) {
-        for (let j = i + 1; j < pattern.length; j++) {
-          const diff = Math.abs(pattern[i] - pattern[j]);
-          if (diff === 1 || diff === 9) adjacentPairs.push([pattern[i], pattern[j]]);
-        }
-      }
-
-      // Each adjacent pair must have exactly one singleton
-      let laddersBlocked = true;
-      for (const [a, b] of adjacentPairs) {
-        const aSingle = counts[a] === 1;
-        const bSingle = counts[b] === 1;
-        if (!(aSingle && !bSingle || !aSingle && bSingle)) {
-          laddersBlocked = false;
-          break;
-        }
-      }
-      if (!laddersBlocked) continue;
-
-      // The 4 non-singleton digits must each be ≡ 3 mod 4
-      const nonSingletons = pattern.filter(d => counts[d] > 1);
-      if (nonSingletons.length !== 4) continue;
-      if (nonSingletons.every(d => counts[d] % 4 === 3)) return true;
-    }
-  }
-  return false;
 }
 
 // --- Grid Cell ---
@@ -603,7 +557,7 @@ function ScoreTrack({
   }, adjustedScore > 100 ? adjustedScore : '♥')));
 }
 
-// --- Toggle Switch Component ---
+// --- Toggle Switch ---
 function ToggleSwitch({
   checked,
   onChange,
@@ -660,9 +614,501 @@ function ToggleSwitch({
   }, rightLabel));
 }
 
+// --- Player Scoresheet Component ---
+function PlayerSheet({
+  playerIdx,
+  ps,
+  bank,
+  phase,
+  round,
+  roundHistory,
+  classicMode,
+  laxPlacement,
+  cellHints,
+  crossOut,
+  verticalCategories,
+  onUpdatePlayer,
+  onToggleBankSelection,
+  onBookDigit,
+  onUndo,
+  onEndRound,
+  onUseBonusBook,
+  onEndBonusBook,
+  onEndgameBonusDone,
+  twoPlayer,
+  redInk
+}) {
+  const grids = ps.grids;
+  const seqBonusI = hasSequenceBonusI(grids);
+  const seqBonusIIA = hasSequenceBonusIIA(grids);
+  const seqBonusIIB = classicMode ? false : hasSequenceBonusIIB(grids);
+  const seqBonusIII = classicMode ? hasSequenceBonusIII(grids) : hasModernBonusIII(grids, laxPlacement);
+  const rawScore = totalScore(grids, laxPlacement);
+  const currentScore = rawScore + (seqBonusIII ? 5 : 0);
+  const bonusBookCategories = (() => {
+    if (!ps.bonusBookPhase) return ['sequence', 'matching', 'ladder'];
+    if (ps.bonusBookSource === 'A') {
+      if (ps.seqBonusIIBUsed && ps.seqBonusIIBCategory === '?') return ['sequence'];
+      return ['sequence', 'matching', 'ladder'];
+    }
+    if (ps.bonusBookSource === 'B') {
+      if (ps.seqBonusIIAUsed && ps.seqBonusIIACategory === '?') return ['sequence'];
+      return ['sequence', 'matching', 'ladder'];
+    }
+    return ['sequence', 'matching', 'ladder'];
+  })();
+  const canSelectBank = phase === 'book' && !ps.roundDone && (ps.bonusBookPhase || ps.bookingsThisRound < ps.maxBooking) || phase === 'endgame-bonus' && ps.bonusBookPhase && !ps.roundDone;
+  const playerLabel = twoPlayer ? `Player ${playerIdx + 1}` : null;
+  const playerColor = playerIdx === 0 ? '#2a6fdb' : '#d4442a';
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0,
+      border: twoPlayer ? '2px solid #ddd' : 'none',
+      borderRadius: twoPlayer ? 8 : 0,
+      padding: twoPlayer ? '12px 10px' : 0,
+      background: twoPlayer ? '#fefcf6' : 'transparent'
+    }
+  }, playerLabel && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 18,
+      fontWeight: 'bold',
+      textAlign: 'center',
+      marginBottom: 8,
+      color: playerColor
+    }
+  }, playerLabel, ps.roundDone && (phase === 'book' || phase === 'endgame-bonus') && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 'normal',
+      opacity: 0.6,
+      marginLeft: 8
+    }
+  }, "\u2713 Done")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: 'center',
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement(ScoreTrack, {
+    score: rawScore,
+    bonusIII: seqBonusIII,
+    crossOut: crossOut
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 'bold'
+    }
+  }, "Score: ", currentScore, " / 100")), phase === 'choose' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      marginBottom: 6,
+      textAlign: 'center'
+    }
+  }, "Choose your category:"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'center'
+    }
+  }, ['sequence', 'matching', 'ladder'].map(cat => /*#__PURE__*/React.createElement("button", {
+    key: cat,
+    onClick: () => onUpdatePlayer(playerIdx, {
+      chosenCategory: ps.chosenCategory === cat ? null : cat
+    }),
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 16,
+      padding: '6px 16px',
+      background: ps.chosenCategory === cat ? '#2a2a2a' : '#fff',
+      color: ps.chosenCategory === cat ? '#fff' : '#2a2a2a',
+      border: '2px solid #2a2a2a',
+      borderRadius: 4,
+      cursor: 'pointer',
+      transition: 'all 0.15s'
+    }
+  }, cat[0].toUpperCase()))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      textAlign: 'center',
+      marginTop: 4,
+      opacity: 0.6
+    }
+  }, ps.chosenCategory ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: '0 0 auto'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 'bold',
+      marginBottom: 4
+    }
+  }, "Bank"), Array.from({
+    length: TOTAL_ROUNDS
+  }, (_, r) => {
+    const roundDigits = bank.filter(b => b.round === r);
+    const startIdx = bank.indexOf(roundDigits[0]);
+    const history = roundHistory[r];
+    return /*#__PURE__*/React.createElement("div", {
+      key: r,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 3,
+        marginBottom: 1,
+        opacity: r > round ? 0.3 : 1
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        width: 18,
+        textAlign: 'right'
+      }
+    }, r + 1, "."), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        width: 12,
+        textAlign: 'center',
+        textDecoration: history ? 'underline' : 'none',
+        fontWeight: history ? 'bold' : 'normal'
+      }
+    }, r < round && history ? ps.chosenCategory && r === round ? ps.chosenCategory[0].toUpperCase() : roundHistory[r] ? roundHistory[r].categories?.[playerIdx]?.[0]?.toUpperCase() || '·' : '·' : r === round && ps.chosenCategory ? ps.chosenCategory[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 1
+      }
+    }, roundDigits.length > 0 ? roundDigits.map((b, i) => {
+      const globalIdx = startIdx + i;
+      return /*#__PURE__*/React.createElement(BankDigit, {
+        key: i,
+        digit: b.digit,
+        used: ps.bankUsed[globalIdx],
+        selected: ps.selectedBankIndices.includes(globalIdx),
+        selectable: canSelectBank && !ps.bankUsed[globalIdx],
+        onClick: () => onToggleBankSelection(playerIdx, globalIdx),
+        crossOut: crossOut
+      });
+    }) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        opacity: 0.3,
+        lineHeight: '32px'
+      }
+    }, "\xB7 \xB7 \xB7")));
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      flex: 1,
+      minWidth: 0,
+      flexDirection: verticalCategories ? 'column' : 'row'
+    }
+  }, ['sequence', 'matching', 'ladder'].map(cat => {
+    const catLabel = cat.charAt(0).toUpperCase() + cat.slice(1);
+    const scoreInfo = cat === 'sequence' ? 'XYZ=10 / WXYZ=15' : cat === 'matching' ? 'XXX=15 / XXXX=20' : 'XXYY=20 (Y=X±1)';
+    const canBookHere = phase === 'book' && !ps.roundDone && ps.chosenCategory === cat || ps.bonusBookPhase && !ps.roundDone && bonusBookCategories.includes(cat) || phase === 'endgame-bonus' && ps.bonusBookPhase && !ps.roundDone && bonusBookCategories.includes(cat);
+    return /*#__PURE__*/React.createElement("div", {
+      key: cat,
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 3
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        fontStyle: 'italic'
+      }
+    }, catLabel), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10,
+        opacity: 0.5
+      }
+    }, scoreInfo)), grids[cat].map((row, rowIdx) => {
+      const rowScore = scoreRow(cat, row, laxPlacement);
+      const scoringCells = (() => {
+        if (rowScore === 0) return new Set();
+        if (cat === 'ladder') return new Set(row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1));
+        if (cat === 'matching') {
+          const filled = row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
+          if (rowScore === 20) return new Set(filled);
+          if (laxPlacement) return new Set(filled);
+          for (let start = 0; start <= filled.length - 3; start++) {
+            const group = filled.slice(start, start + 3);
+            if (group[2] - group[0] === 2) return new Set(group);
+          }
+          return new Set();
+        }
+        if (cat === 'sequence') {
+          const filled = row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
+          if (rowScore === 15 && filled.length === 4) return new Set(filled);
+          for (let start = 0; start <= filled.length - 3; start++) {
+            const group = filled.slice(start, start + 3);
+            if (group[2] - group[0] === 2) {
+              const digits = group.map(i => row[i]);
+              if (isValidSequence(digits)) return new Set(group);
+            }
+          }
+          return new Set();
+        }
+        return new Set();
+      })();
+      const selectedDigit = ps.selectedBankIndices.length === 1 ? bank[ps.selectedBankIndices[0]].digit : null;
+      const canPlaceInCell = colIdx => {
+        if (!canBookHere || row[colIdx] !== null || selectedDigit === null) return false;
+        if (cat === 'sequence') {
+          const existing = row.map((d, i) => d !== null ? {
+            digit: d,
+            pos: i
+          } : null).filter(Boolean);
+          return canExtendSequence(existing, selectedDigit, colIdx);
+        } else if (cat === 'matching') {
+          const existing = row.filter(c => c !== null);
+          return existing.length === 0 || existing[0] === selectedDigit;
+        } else if (cat === 'ladder') {
+          const newRow = [...row];
+          newRow[colIdx] = selectedDigit;
+          return laxPlacement ? isValidLaxLadderPlacement(newRow) : isValidLadderPlacement(newRow);
+        }
+        return true;
+      };
+      const rowHints = cellHints ? getCellHints(cat, row, laxPlacement) : null;
+      return /*#__PURE__*/React.createElement("div", {
+        key: rowIdx,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 2,
+          marginBottom: 2
+        }
+      }, row.map((cell, colIdx) => /*#__PURE__*/React.createElement(GridCell, {
+        key: colIdx,
+        value: cell,
+        clickable: canPlaceInCell(colIdx),
+        highlight: scoringCells.has(colIdx),
+        onClick: () => onBookDigit(playerIdx, cat, rowIdx, colIdx),
+        hints: rowHints ? rowHints[colIdx] : null
+      })), rowScore > 0 && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 12,
+          fontWeight: 'bold',
+          color: redInk,
+          marginLeft: 3
+        }
+      }, "+", rowScore));
+    }));
+  }))), (phase === 'book' || phase === 'endgame-bonus') && !ps.roundDone && /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: '1px dashed #ccc',
+      paddingTop: 8,
+      marginTop: 6
+    }
+  }, !ps.bonusBookPhase && phase === 'book' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Booking into ", ps.chosenCategory?.charAt(0).toUpperCase() + ps.chosenCategory?.slice(1)), ' · ', ps.bookingsThisRound, " / ", ps.maxBooking, " booked"), ps.bonusBookPhase && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      marginBottom: 6,
+      color: redInk
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "\uD83C\uDF81 Bonus Book!"), " Place 1 digit into ", bonusBookCategories.length === 3 ? 'any category' : 'Sequence', ".", /*#__PURE__*/React.createElement("button", {
+    onClick: () => onEndBonusBook(playerIdx),
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 11,
+      marginLeft: 6,
+      padding: '2px 6px',
+      background: '#eee',
+      border: '1px solid #ccc',
+      borderRadius: 3,
+      cursor: 'pointer'
+    }
+  }, "Cancel")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, !ps.bonusBookPhase && phase === 'book' && /*#__PURE__*/React.createElement(React.Fragment, null, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onUseBonusBook(playerIdx, 'A'),
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 12,
+      padding: '4px 10px',
+      background: '#fffde6',
+      border: '1.5px solid #b8860b',
+      borderRadius: 4,
+      cursor: 'pointer',
+      color: '#8b6914'
+    }
+  }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onUseBonusBook(playerIdx, 'B'),
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 12,
+      padding: '4px 10px',
+      background: '#fffde6',
+      border: '1.5px solid #b8860b',
+      borderRadius: 4,
+      cursor: 'pointer',
+      color: '#8b6914'
+    }
+  }, "Use Seq Bonus II-B")), !ps.bonusBookPhase && /*#__PURE__*/React.createElement(React.Fragment, null, ps.undoStack.length > 0 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onUndo(playerIdx),
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 12,
+      padding: '4px 10px',
+      background: '#fff',
+      color: '#888',
+      border: '1.5px solid #ccc',
+      borderRadius: 4,
+      cursor: 'pointer'
+    },
+    onMouseEnter: e => {
+      e.target.style.color = '#c0392b';
+      e.target.style.borderColor = '#c0392b';
+    },
+    onMouseLeave: e => {
+      e.target.style.color = '#888';
+      e.target.style.borderColor = '#ccc';
+    }
+  }, "\u21A9 Undo"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onEndRound(playerIdx),
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 13,
+      padding: '4px 14px',
+      background: '#2a2a2a',
+      color: '#fff',
+      border: 'none',
+      borderRadius: 4,
+      cursor: 'pointer',
+      marginLeft: 'auto'
+    }
+  }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round')))), phase === 'endgame-bonus' && !ps.bonusBookPhase && !ps.roundDone && (() => {
+    const anyUnused = ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed || ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: 10,
+        marginTop: 6,
+        background: '#fffde6',
+        border: '1.5px solid #b8860b',
+        borderRadius: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 'bold',
+        color: '#8b6914',
+        marginBottom: 4
+      }
+    }, anyUnused ? 'Use remaining Sequence Bonuses!' : 'All bonuses used!'), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
+      onClick: () => onUseBonusBook(playerIdx, 'A'),
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 12,
+        padding: '4px 10px',
+        background: '#fff',
+        border: '1.5px solid #b8860b',
+        borderRadius: 4,
+        cursor: 'pointer'
+      }
+    }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && /*#__PURE__*/React.createElement("button", {
+      onClick: () => onUseBonusBook(playerIdx, 'B'),
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 12,
+        padding: '4px 10px',
+        background: '#fff',
+        border: '1.5px solid #b8860b',
+        borderRadius: 4,
+        cursor: 'pointer'
+      }
+    }, "Use Seq Bonus II-B"), ps.undoStack.length > 0 && /*#__PURE__*/React.createElement("button", {
+      onClick: () => onUndo(playerIdx),
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 12,
+        padding: '4px 10px',
+        background: '#fff',
+        color: '#888',
+        border: '1.5px solid #ccc',
+        borderRadius: 4,
+        cursor: 'pointer'
+      }
+    }, "\u21A9 Undo"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => onEndgameBonusDone(playerIdx),
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 12,
+        padding: '4px 12px',
+        background: '#2a2a2a',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 4,
+        cursor: 'pointer',
+        marginLeft: 'auto'
+      }
+    }, anyUnused ? 'Skip & Finish' : 'Finish')));
+  })(), /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: '1px dashed #ccc',
+      paddingTop: 6,
+      marginTop: 8,
+      fontSize: 11,
+      opacity: 0.7
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Sequence Bonus:"), ' ', /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: seqBonusI ? '#27ae60' : '#999'
+    }
+  }, "I ", seqBonusI ? '✓' : '○'), ' · ', classicMode ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: ps.seqBonusIIAUnlocked ? '#27ae60' : '#999'
+    }
+  }, "II ", ps.seqBonusIIAUnlocked ? ps.seqBonusIIAUsed ? `✓(${ps.seqBonusIIACategory})` : '★' : '○') : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: ps.seqBonusIIAUnlocked ? '#27ae60' : '#999'
+    }
+  }, "II-A ", ps.seqBonusIIAUnlocked ? ps.seqBonusIIAUsed ? `✓(${ps.seqBonusIIACategory})` : '★' : '○'), ' · ', /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: ps.seqBonusIIBUnlocked ? '#27ae60' : '#999'
+    }
+  }, "II-B ", ps.seqBonusIIBUnlocked ? ps.seqBonusIIBUsed ? `✓(${ps.seqBonusIIBCategory})` : '★' : '○')), ' · ', /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: seqBonusIII ? '#27ae60' : '#999'
+    }
+  }, "III ", seqBonusIII ? '✓ (+5)' : '○')));
+}
+
 // --- Main Game Component ---
-function Simili() {
-  // Settings
+window.Simili = function Simili() {
   const [showSettings, setShowSettings] = useState(false);
   const [wideLayout, setWideLayout] = useState(false);
   const [verticalCategories, setVerticalCategories] = useState(false);
@@ -672,135 +1118,114 @@ function Simili() {
   const [matchPlay, setMatchPlay] = useState(false);
   const [classicMode, setClassicMode] = useState(false);
   const [laxPlacement, setLaxPlacement] = useState(false);
-
-  // Seed: parse from URL on mount, consumed only for first game
   const [seedRolls, setSeedRolls] = useState(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const seed = params.get('seed');
       if (seed && /^\d{30}$/.test(seed)) {
         const rolls = [];
-        for (let i = 0; i < 30; i += 3) {
-          rolls.push([parseInt(seed[i]), parseInt(seed[i + 1]), parseInt(seed[i + 2])]);
-        }
+        for (let i = 0; i < 30; i += 3) rolls.push([parseInt(seed[i]), parseInt(seed[i + 1]), parseInt(seed[i + 2])]);
         return rolls;
       }
     } catch (e) {}
     return null;
   });
 
-  // Game state
-  const [round, setRound] = useState(0); // 0-indexed, 0-9
-  const [phase, setPhase] = useState('pregame'); // 'pregame' | 'choose' | 'rolling' | 'book' | 'gameover'
+  // Match Play state
+  const [matchGameNum, setMatchGameNum] = useState(0);
+  const [matchScores, setMatchScores] = useState([]); // [{p1, p2?}, ...]
+  const [matchPhase, setMatchPhase] = useState('playing'); // 'playing'|'between'|'done'|'sudden-death'
+
+  // Game state (shared)
+  const [round, setRound] = useState(0);
+  const [phase, setPhase] = useState('pregame');
   const [abandoned, setAbandoned] = useState(false);
-  const [chosenCategory, setChosenCategory] = useState(null);
   const [currentRoll, setCurrentRoll] = useState([null, null, null]);
   const [spinning, setSpinning] = useState(false);
-  const [reelsStopped, setReelsStopped] = useState(0);
-
-  // Bank: array of { digit, used, round }
   const [bank, setBank] = useState([]);
-
-  // Grids: 5 rows of 4 cells each
-  const [grids, setGrids] = useState({
-    sequence: Array.from({
-      length: MAX_ROWS
-    }, () => Array(ROW_SIZE).fill(null)),
-    matching: Array.from({
-      length: MAX_ROWS
-    }, () => Array(ROW_SIZE).fill(null)),
-    ladder: Array.from({
-      length: MAX_ROWS
-    }, () => Array(ROW_SIZE).fill(null))
-  });
-
-  // Booking state
-  const [selectedBankIndices, setSelectedBankIndices] = useState([]);
-  const [bookingTarget, setBookingTarget] = useState(null); // { category, row, col }
-
-  // Sequence Bonus tracking
-  const [seqBonusIIAUsed, setSeqBonusIIAUsed] = useState(false);
-  const [seqBonusIIBUsed, setSeqBonusIIBUsed] = useState(false);
-  const [seqBonusIIAUnlocked, setSeqBonusIIAUnlocked] = useState(false);
-  const [seqBonusIIBUnlocked, setSeqBonusIIBUnlocked] = useState(false);
-  const [seqBonusIIACategory, setSeqBonusIIACategory] = useState(null); // 'S' or '?'
-  const [seqBonusIIBCategory, setSeqBonusIIBCategory] = useState(null);
-  const [bonusBookPhase, setBonusBookPhase] = useState(false); // true if in bonus booking
-  const [bonusBookSource, setBonusBookSource] = useState(null); // 'A' or 'B'
-
-  // Round history for display
   const [roundHistory, setRoundHistory] = useState([]);
 
-  // Undo stack: each entry captures the state before a booking
-  const [undoStack, setUndoStack] = useState([]);
-
-  // Derived state
-  const seqBonusI = hasSequenceBonusI(grids);
-  const seqBonusIIA = hasSequenceBonusIIA(grids);
-  const seqBonusIIB = classicMode ? false : hasSequenceBonusIIB(grids);
-  const seqBonusIII = classicMode ? hasSequenceBonusIII(grids) : hasModernBonusIII(grids, laxPlacement);
-  const currentScore = totalScore(grids, laxPlacement) + (seqBonusIII ? 5 : 0);
-
-  // maxBooking is locked in at the start of each round's booking phase
-  const [maxBooking, setMaxBooking] = useState(MAX_BOOK_DEFAULT);
-  const [bookingsThisRound, setBookingsThisRound] = useState(0);
-
-  // Ref to track abandoned state for timeout callbacks
-  const abandonedRef = React.useRef(false);
-  React.useEffect(() => {
+  // Player states
+  const [players, setPlayers] = useState([createPlayerState()]);
+  useEffect(() => {
+    if (phase === 'pregame') {
+      setPlayers(twoPlayer ? [createPlayerState(), createPlayerState()] : [createPlayerState()]);
+    }
+  }, [twoPlayer]);
+  const abandonedRef = useRef(false);
+  useEffect(() => {
     abandonedRef.current = abandoned;
   }, [abandoned]);
+  const numPlayers = twoPlayer ? 2 : 1;
+  const updatePlayer = (idx, updates) => {
+    setPlayers(prev => prev.map((p, i) => i === idx ? {
+      ...p,
+      ...updates
+    } : p));
+  };
+  const updatePlayerFn = (idx, fn) => {
+    setPlayers(prev => prev.map((p, i) => i === idx ? fn(p) : p));
+  };
+  const allCategoriesChosen = () => {
+    for (let i = 0; i < numPlayers; i++) {
+      if (!players[i]?.chosenCategory) return false;
+    }
+    return true;
+  };
 
-  // Handle rolling
+  // In 1-player mode, auto-lock category when chosen (no separate lock step needed)
+  // Actually keep the lock button for consistency, but in 1P mode we can skip it
+  // Let's keep the explicit lock for both modes for clarity
+
   const handleRoll = () => {
-    // Lock in max booking based on state BEFORE this round's roll
-    const bonusIActive = hasSequenceBonusI(grids);
-    setMaxBooking(chosenCategory === 'sequence' && bonusIActive ? MAX_BOOK_SEQ_BONUS : MAX_BOOK_DEFAULT);
+    setPlayers(prev => prev.map(p => ({
+      ...p,
+      maxBooking: p.chosenCategory === 'sequence' && hasSequenceBonusI(p.grids) ? MAX_BOOK_SEQ_BONUS : MAX_BOOK_DEFAULT
+    })));
     const roll = seedRolls && seedRolls[round] ? seedRolls[round] : [Math.floor(Math.random() * 10), Math.floor(Math.random() * 10), Math.floor(Math.random() * 10)];
     setCurrentRoll(roll);
     setSpinning(true);
-    setReelsStopped(0);
     setPhase('rolling');
     setTimeout(() => {
       if (abandonedRef.current) return;
       setSpinning(false);
       setPhase('book');
-      setBank(prev => [...prev, ...roll.map(d => ({
-        digit: d,
-        used: false,
-        round
-      }))]);
+      setBank(prev => {
+        const newBank = [...prev, ...roll.map(d => ({
+          digit: d,
+          round
+        }))];
+        setPlayers(prevP => prevP.map(p => ({
+          ...p,
+          bankUsed: [...p.bankUsed, false, false, false],
+          bookingsThisRound: 0,
+          undoStack: [],
+          roundDone: false
+        })));
+        return newBank;
+      });
       setRoundHistory(prev => [...prev, {
-        category: chosenCategory,
         roll,
-        round
+        round,
+        categories: players.map(p => p.chosenCategory)
       }]);
-      setBookingsThisRound(0);
-      setUndoStack([]);
     }, 2200);
   };
-
-  // Handle bank selection
-  const toggleBankSelection = index => {
-    if (bank[index].used) return;
-    setSelectedBankIndices(prev => prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]);
+  const toggleBankSelection = (playerIdx, bankIdx) => {
+    updatePlayerFn(playerIdx, p => ({
+      ...p,
+      selectedBankIndices: p.selectedBankIndices.includes(bankIdx) ? p.selectedBankIndices.filter(i => i !== bankIdx) : [bankIdx]
+    }));
   };
-
-  // Handle booking a digit into a cell
-  const handleBookDigit = (category, rowIdx, colIdx) => {
-    if (selectedBankIndices.length !== 1) return;
-    const bankIdx = selectedBankIndices[0];
+  const handleBookDigit = (playerIdx, category, rowIdx, colIdx) => {
+    const p = players[playerIdx];
+    if (p.selectedBankIndices.length !== 1) return;
+    const bankIdx = p.selectedBankIndices[0];
     const digit = bank[bankIdx].digit;
-
-    // Validate placement
-    const row = grids[category][rowIdx];
+    const row = p.grids[category][rowIdx];
     if (row[colIdx] !== null) return;
-
-    // Check booking limits
-    const isBonusBook = bonusBookPhase;
-    if (!isBonusBook && bookingsThisRound >= maxBooking) return;
-
-    // Validate consistency
+    const isBonusBook = p.bonusBookPhase;
+    if (!isBonusBook && p.bookingsThisRound >= p.maxBooking) return;
     if (category === 'sequence') {
       const existing = row.map((d, i) => d !== null ? {
         digit: d,
@@ -815,180 +1240,262 @@ function Simili() {
       newRow[colIdx] = digit;
       if (laxPlacement ? !isValidLaxLadderPlacement(newRow) : !isValidLadderPlacement(newRow)) return;
     }
-
-    // Save undo snapshot before applying
-    setUndoStack(prev => [...prev, {
-      grids: {
-        sequence: grids.sequence.map(r => [...r]),
-        matching: grids.matching.map(r => [...r]),
-        ladder: grids.ladder.map(r => [...r])
-      },
-      bank: bank.map(b => ({
-        ...b
-      })),
-      bookingsThisRound,
-      maxBooking,
-      bonusBookPhase,
-      bonusBookSource,
-      seqBonusIIAUsed,
-      seqBonusIIBUsed,
-      seqBonusIIAUnlocked,
-      seqBonusIIBUnlocked,
-      seqBonusIIACategory,
-      seqBonusIIBCategory
-    }]);
-
-    // Apply booking
-    const newGrids = {
-      ...grids
-    };
-    newGrids[category] = grids[category].map((r, ri) => ri === rowIdx ? r.map((c, ci) => ci === colIdx ? digit : c) : [...r]);
-    setGrids(newGrids);
-    const newBank = bank.map((b, i) => i === bankIdx ? {
-      ...b,
-      used: true
-    } : b);
-    setBank(newBank);
-    setSelectedBankIndices([]);
-
-    // Check if this booking unlocks any Sequence Bonus II
-    if (hasSequenceBonusIIA(newGrids) && !seqBonusIIAUnlocked) setSeqBonusIIAUnlocked(true);
-    if (!classicMode && hasSequenceBonusIIB(newGrids) && !seqBonusIIBUnlocked) setSeqBonusIIBUnlocked(true);
-    if (isBonusBook) {
-      // Determine if this was in sequence or not
-      if (bonusBookSource === 'A') {
-        setSeqBonusIIAUsed(true);
-        setSeqBonusIIACategory(category === 'sequence' ? 'S' : '?');
+    updatePlayerFn(playerIdx, p => {
+      const snapshot = {
+        grids: {
+          sequence: p.grids.sequence.map(r => [...r]),
+          matching: p.grids.matching.map(r => [...r]),
+          ladder: p.grids.ladder.map(r => [...r])
+        },
+        bankUsed: [...p.bankUsed],
+        bookingsThisRound: p.bookingsThisRound,
+        maxBooking: p.maxBooking,
+        bonusBookPhase: p.bonusBookPhase,
+        bonusBookSource: p.bonusBookSource,
+        seqBonusIIAUsed: p.seqBonusIIAUsed,
+        seqBonusIIBUsed: p.seqBonusIIBUsed,
+        seqBonusIIAUnlocked: p.seqBonusIIAUnlocked,
+        seqBonusIIBUnlocked: p.seqBonusIIBUnlocked,
+        seqBonusIIACategory: p.seqBonusIIACategory,
+        seqBonusIIBCategory: p.seqBonusIIBCategory
+      };
+      const newGrids = {
+        ...p.grids
+      };
+      newGrids[category] = p.grids[category].map((r, ri) => ri === rowIdx ? r.map((c, ci) => ci === colIdx ? digit : c) : [...r]);
+      const newBankUsed = [...p.bankUsed];
+      newBankUsed[bankIdx] = true;
+      let ns = {
+        ...p,
+        grids: newGrids,
+        bankUsed: newBankUsed,
+        selectedBankIndices: [],
+        undoStack: [...p.undoStack, snapshot]
+      };
+      if (hasSequenceBonusIIA(newGrids) && !p.seqBonusIIAUnlocked) ns.seqBonusIIAUnlocked = true;
+      if (!classicMode && hasSequenceBonusIIB(newGrids) && !p.seqBonusIIBUnlocked) ns.seqBonusIIBUnlocked = true;
+      if (isBonusBook) {
+        if (p.bonusBookSource === 'A') {
+          ns.seqBonusIIAUsed = true;
+          ns.seqBonusIIACategory = category === 'sequence' ? 'S' : '?';
+        } else {
+          ns.seqBonusIIBUsed = true;
+          ns.seqBonusIIBCategory = category === 'sequence' ? 'S' : '?';
+        }
+        ns.bonusBookPhase = false;
+        ns.bonusBookSource = null;
       } else {
-        setSeqBonusIIBUsed(true);
-        setSeqBonusIIBCategory(category === 'sequence' ? 'S' : '?');
+        ns.bookingsThisRound = p.bookingsThisRound + 1;
       }
-      setBonusBookPhase(false);
-      setBonusBookSource(null);
-    } else {
-      setBookingsThisRound(prev => prev + 1);
-    }
+      return ns;
+    });
+  };
+  const handleUndo = playerIdx => {
+    updatePlayerFn(playerIdx, p => {
+      if (p.undoStack.length === 0) return p;
+      const s = p.undoStack[p.undoStack.length - 1];
+      return {
+        ...p,
+        grids: s.grids,
+        bankUsed: s.bankUsed,
+        bookingsThisRound: s.bookingsThisRound,
+        maxBooking: s.maxBooking,
+        seqBonusIIAUsed: s.seqBonusIIAUsed,
+        seqBonusIIBUsed: s.seqBonusIIBUsed,
+        seqBonusIIAUnlocked: s.seqBonusIIAUnlocked,
+        seqBonusIIBUnlocked: s.seqBonusIIBUnlocked,
+        seqBonusIIACategory: s.seqBonusIIACategory,
+        seqBonusIIBCategory: s.seqBonusIIBCategory,
+        selectedBankIndices: [],
+        bonusBookPhase: phase === 'endgame-bonus' ? false : s.bonusBookPhase,
+        bonusBookSource: phase === 'endgame-bonus' ? null : s.bonusBookSource,
+        undoStack: p.undoStack.slice(0, -1)
+      };
+    });
+  };
+  const handleEndRound = playerIdx => {
+    updatePlayer(playerIdx, {
+      selectedBankIndices: [],
+      roundDone: true
+    });
   };
 
-  // Undo last booking
-  const handleUndo = () => {
-    if (undoStack.length === 0) return;
-    const snapshot = undoStack[undoStack.length - 1];
-    setGrids(snapshot.grids);
-    setBank(snapshot.bank);
-    setBookingsThisRound(snapshot.bookingsThisRound);
-    setMaxBooking(snapshot.maxBooking);
-    setSeqBonusIIAUsed(snapshot.seqBonusIIAUsed);
-    setSeqBonusIIBUsed(snapshot.seqBonusIIBUsed);
-    setSeqBonusIIAUnlocked(snapshot.seqBonusIIAUnlocked);
-    setSeqBonusIIBUnlocked(snapshot.seqBonusIIBUnlocked);
-    setSeqBonusIIACategory(snapshot.seqBonusIIACategory);
-    setSeqBonusIIBCategory(snapshot.seqBonusIIBCategory);
-    setSelectedBankIndices([]);
-    // During endgame-bonus, always return to the endgame menu (not back into bonus booking)
-    if (phase === 'endgame-bonus') {
-      setBonusBookPhase(false);
-      setBonusBookSource(null);
-    } else {
-      setBonusBookPhase(snapshot.bonusBookPhase);
-      setBonusBookSource(snapshot.bonusBookSource);
+  // Advance when all players done booking
+  const prevPhaseRef = useRef(phase);
+  const prevPlayersDoneRef = useRef(false);
+  useEffect(() => {
+    if (phase !== 'book') {
+      prevPhaseRef.current = phase;
+      return;
     }
-    setUndoStack(prev => prev.slice(0, -1));
-  };
-
-  // End round
-  const handleEndRound = () => {
-    setSelectedBankIndices([]);
+    const allDone = players.every(p => p.roundDone);
+    if (!allDone) {
+      prevPlayersDoneRef.current = false;
+      return;
+    }
+    if (prevPlayersDoneRef.current) return; // already processed
+    prevPlayersDoneRef.current = true;
     if (round >= TOTAL_ROUNDS - 1) {
-      // Check for unused bonus II
-      const hasUnusedA = seqBonusIIAUnlocked && !seqBonusIIAUsed;
-      const hasUnusedB = seqBonusIIBUnlocked && !seqBonusIIBUsed;
-      if (hasUnusedA || hasUnusedB) {
+      const anyHasBonus = players.some(p => {
+        return p.seqBonusIIAUnlocked && !p.seqBonusIIAUsed || p.seqBonusIIBUnlocked && !p.seqBonusIIBUsed;
+      });
+      if (anyHasBonus) {
         setPhase('endgame-bonus');
-        setUndoStack([]); // Clear round 10 undo stack so only bonus books can be undone
+        setPlayers(prev => prev.map(p => {
+          const hasUnused = p.seqBonusIIAUnlocked && !p.seqBonusIIAUsed || p.seqBonusIIBUnlocked && !p.seqBonusIIBUsed;
+          return {
+            ...p,
+            roundDone: !hasUnused,
+            undoStack: []
+          };
+        }));
       } else {
         setPhase('gameover');
       }
     } else {
       setRound(prev => prev + 1);
       setPhase('choose');
-      setChosenCategory(null);
+      setPlayers(prev => prev.map(p => ({
+        ...p,
+        chosenCategory: null,
+        roundDone: false
+      })));
+    }
+    prevPhaseRef.current = phase;
+  }, [players, phase, round]);
+
+  // Advance endgame-bonus
+  useEffect(() => {
+    if (phase !== 'endgame-bonus') return;
+    if (players.every(p => p.roundDone)) setPhase('gameover');
+  }, [players, phase]);
+  const handleUseBonusBook = (playerIdx, source) => {
+    updatePlayer(playerIdx, {
+      bonusBookPhase: true,
+      bonusBookSource: source
+    });
+  };
+  const handleEndBonusBook = playerIdx => {
+    updatePlayer(playerIdx, {
+      bonusBookPhase: false,
+      bonusBookSource: null
+    });
+  };
+  const handleEndgameBonusDone = playerIdx => {
+    updatePlayer(playerIdx, {
+      roundDone: true,
+      selectedBankIndices: []
+    });
+  };
+
+  // --- Match Play Logic ---
+  const handleMatchNextGame = () => {
+    const scores = players.map(p => {
+      const s = getPlayerFinalScore(p, classicMode, laxPlacement);
+      return s >= 100 ? s : 0;
+    });
+    const newScores = [...matchScores, twoPlayer ? {
+      p1: scores[0],
+      p2: scores[1]
+    } : {
+      p1: scores[0]
+    }];
+    setMatchScores(newScores);
+    if (matchPhase === 'sudden-death') {
+      // Check if sudden death resolved the tie
+      if (twoPlayer && scores[0] !== scores[1]) {
+        setMatchPhase('done');
+      } else if (!twoPlayer) {
+        setMatchPhase('done');
+      }
+      // else still tied, stay in sudden-death
+      return;
+    }
+    if (matchGameNum + 1 >= MATCH_GAMES) {
+      setMatchPhase('done');
+    } else {
+      setMatchPhase('between');
     }
   };
-
-  // Use bonus book (during round or endgame)
-  const handleUseBonusBook = source => {
-    setBonusBookPhase(true);
-    setBonusBookSource(source);
-  };
-  const handleEndBonusBook = () => {
-    // Cancel back without consuming the bonus
-    setBonusBookPhase(false);
-    setBonusBookSource(null);
-  };
-  const handleEndgameBonusDone = () => {
-    setPhase('gameover');
-  };
-
-  // Reset game
-  const handleReset = () => {
+  const resetGameState = () => {
     setRound(0);
-    setPhase('pregame');
-    setChosenCategory(null);
+    setPhase('choose');
+    setAbandoned(false);
     setCurrentRoll([null, null, null]);
     setSpinning(false);
     setBank([]);
-    setGrids({
-      sequence: Array.from({
-        length: MAX_ROWS
-      }, () => Array(ROW_SIZE).fill(null)),
-      matching: Array.from({
-        length: MAX_ROWS
-      }, () => Array(ROW_SIZE).fill(null)),
-      ladder: Array.from({
-        length: MAX_ROWS
-      }, () => Array(ROW_SIZE).fill(null))
-    });
-    setSelectedBankIndices([]);
-    setBookingsThisRound(0);
     setRoundHistory([]);
-    setSeqBonusIIAUsed(false);
-    setSeqBonusIIBUsed(false);
-    setSeqBonusIIAUnlocked(false);
-    setSeqBonusIIBUnlocked(false);
-    setSeqBonusIIACategory(null);
-    setSeqBonusIIBCategory(null);
-    setBonusBookPhase(false);
-    setBonusBookSource(null);
-    setUndoStack([]);
-    setMaxBooking(MAX_BOOK_DEFAULT);
-    setAbandoned(false);
+    setPlayers(twoPlayer ? [createPlayerState(), createPlayerState()] : [createPlayerState()]);
     setSeedRolls(null);
   };
-
-  // Determine which categories bonus book can go into
-  const bonusBookCategories = (() => {
-    if (!bonusBookPhase) return ['sequence', 'matching', 'ladder'];
-    // If both bonuses unlocked and one used '?', the other must go to sequence
-    if (bonusBookSource === 'A') {
-      if (seqBonusIIBUsed && seqBonusIIBCategory === '?') return ['sequence'];
-      return ['sequence', 'matching', 'ladder'];
+  const handleMatchContinue = () => {
+    setMatchGameNum(prev => prev + 1);
+    setMatchPhase('playing');
+    resetGameState();
+  };
+  const handleSuddenDeath = () => {
+    setMatchPhase('sudden-death');
+    resetGameState();
+  };
+  const handleReset = () => {
+    setRound(0);
+    setPhase('pregame');
+    setAbandoned(false);
+    setCurrentRoll([null, null, null]);
+    setSpinning(false);
+    setBank([]);
+    setRoundHistory([]);
+    setPlayers(twoPlayer ? [createPlayerState(), createPlayerState()] : [createPlayerState()]);
+    setSeedRolls(null);
+    setMatchGameNum(0);
+    setMatchScores([]);
+    setMatchPhase('playing');
+  };
+  const computeMatchResult = scores => {
+    const p1Total = scores.reduce((s, g) => s + g.p1, 0);
+    const p2Total = scores.reduce((s, g) => s + (g.p2 || 0), 0);
+    if (!twoPlayer) return {
+      winner: p1Total > 0 ? 1 : 0,
+      p1Total,
+      p2Total: 0
+    };
+    if (p1Total !== p2Total) return {
+      winner: p1Total > p2Total ? 1 : 2,
+      p1Total,
+      p2Total
+    };
+    for (let i = scores.length - 1; i >= 0; i--) {
+      if (scores[i].p1 !== scores[i].p2) return {
+        winner: scores[i].p1 > scores[i].p2 ? 1 : 2,
+        p1Total,
+        p2Total,
+        tiebreak: true
+      };
     }
-    if (bonusBookSource === 'B') {
-      if (seqBonusIIAUsed && seqBonusIIACategory === '?') return ['sequence'];
-      return ['sequence', 'matching', 'ladder'];
-    }
-    return ['sequence', 'matching', 'ladder'];
-  })();
+    return {
+      winner: 0,
+      p1Total,
+      p2Total,
+      tied: true
+    };
+  };
   const paperBg = '#faf6ed';
   const inkColor = '#2a2a2a';
   const redInk = '#c0392b';
+  const gameOverInfo = phase === 'gameover' ? players.map(p => {
+    const score = getPlayerFinalScore(p, classicMode, laxPlacement);
+    const won = !abandoned && score >= 100;
+    const unwinnable = !abandoned && !won && bank.length === 30 && isUnwinnableSequence(bank);
+    return {
+      score,
+      won,
+      unwinnable
+    };
+  }) : [];
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: '100vh',
-      background: `
-        linear-gradient(to bottom, #f0ebe0, #faf6ed 5%, #faf6ed 95%, #f0ebe0)
-      `,
+      background: 'linear-gradient(to bottom, #f0ebe0, #faf6ed 5%, #faf6ed 95%, #f0ebe0)',
       fontFamily: "'Special Elite', 'Courier New', monospace",
       color: inkColor,
       padding: '20px 8px'
@@ -996,16 +1503,10 @@ function Simili() {
   }, /*#__PURE__*/React.createElement("style", null, `
         @import url('https://fonts.googleapis.com/css2?family=Special+Elite&display=swap');
         * { box-sizing: border-box; }
-        @keyframes reelSpin {
-          0% { transform: translateY(0); }
-          25% { transform: translateY(-8px); }
-          50% { transform: translateY(0); }
-          75% { transform: translateY(8px); }
-          100% { transform: translateY(0); }
-        }
+        @keyframes reelSpin { 0% { transform: translateY(0); } 25% { transform: translateY(-8px); } 50% { transform: translateY(0); } 75% { transform: translateY(8px); } 100% { transform: translateY(0); } }
       `), /*#__PURE__*/React.createElement("div", {
     style: {
-      maxWidth: wideLayout ? 1200 : 800,
+      maxWidth: wideLayout ? 1200 : twoPlayer ? 1000 : 800,
       margin: '0 auto',
       background: '#fff',
       border: '2px solid #ccc',
@@ -1056,27 +1557,43 @@ function Simili() {
     style: {
       fontSize: '0.75em'
     }
-  }, "I")), /*#__PURE__*/React.createElement("div", {
+  }, "I")), matchPlay && phase !== 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
       textAlign: 'center',
-      marginBottom: 16
+      marginBottom: 12,
+      padding: '8px 16px',
+      background: '#f5f0e6',
+      border: '1px solid #ddd',
+      borderRadius: 6
     }
-  }, /*#__PURE__*/React.createElement(ScoreTrack, {
-    score: totalScore(grids, laxPlacement),
-    bonusIII: seqBonusIII,
-    crossOut: crossOut
-  }), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 16,
-      fontWeight: 'bold'
+      fontSize: 14,
+      fontWeight: 'bold',
+      marginBottom: 4
     }
-  }, "Score: ", currentScore, " / 100")), /*#__PURE__*/React.createElement("div", {
+  }, matchPhase === 'sudden-death' ? '⚡ Sudden Death' : `Match: Game ${matchGameNum + 1} of ${MATCH_GAMES}`), matchScores.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      opacity: 0.7
+    }
+  }, twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, "P1: ", matchScores.reduce((s, g) => s + g.p1, 0), " \xB7 P2: ", matchScores.reduce((s, g) => s + (g.p2 || 0), 0), /*#__PURE__*/React.createElement("br", null), matchScores.map((g, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
+    style: {
+      marginRight: 8
+    }
+  }, "G", i + 1, ": ", g.p1, "\u2013", g.p2))) : /*#__PURE__*/React.createElement(React.Fragment, null, "Total: ", matchScores.reduce((s, g) => s + g.p1, 0), /*#__PURE__*/React.createElement("br", null), matchScores.map((g, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
+    style: {
+      marginRight: 8
+    }
+  }, "G", i + 1, ": ", g.p1))))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      marginBottom: 20,
-      padding: '16px 0',
+      marginBottom: 16,
+      padding: '12px 0',
       borderTop: '1px dashed #ccc',
       borderBottom: '1px dashed #ccc'
     }
@@ -1086,44 +1603,7 @@ function Simili() {
       marginBottom: 8,
       opacity: 0.7
     }
-  }, phase === 'pregame' ? 'Configure settings below, then click Start Game.' : `Round ${round + 1} of ${TOTAL_ROUNDS}`), phase === 'choose' && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 16
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      marginBottom: 8,
-      textAlign: 'center'
-    }
-  }, "Choose your category:"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 12,
-      justifyContent: 'center'
-    }
-  }, ['sequence', 'matching', 'ladder'].map(cat => /*#__PURE__*/React.createElement("button", {
-    key: cat,
-    onClick: () => setChosenCategory(prev => prev === cat ? null : cat),
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 18,
-      padding: '8px 20px',
-      background: chosenCategory === cat ? '#2a2a2a' : '#fff',
-      color: chosenCategory === cat ? '#fff' : '#2a2a2a',
-      border: '2px solid #2a2a2a',
-      borderRadius: 4,
-      cursor: 'pointer',
-      transition: 'all 0.15s'
-    }
-  }, cat[0].toUpperCase()))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      textAlign: 'center',
-      marginTop: 4,
-      opacity: 0.6
-    }
-  }, chosenCategory ? `${chosenCategory.charAt(0).toUpperCase() + chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), /*#__PURE__*/React.createElement("div", {
+  }, phase === 'pregame' ? matchPlay ? 'Configure settings below, then click Start Match.' : 'Configure settings below, then click Start Game.' : `Round ${round + 1} of ${TOTAL_ROUNDS}`), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 12,
@@ -1134,7 +1614,7 @@ function Simili() {
     targetDigit: currentRoll[i],
     spinning: spinning,
     delay: i * 300
-  }))), phase === 'choose' && chosenCategory && /*#__PURE__*/React.createElement("button", {
+  }))), phase === 'choose' && allCategoriesChosen() && /*#__PURE__*/React.createElement("button", {
     onClick: handleRoll,
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -1150,7 +1630,15 @@ function Simili() {
     },
     onMouseDown: e => e.target.style.transform = 'scale(0.97)',
     onMouseUp: e => e.target.style.transform = 'scale(1)'
-  }, "ROLL"), phase === 'rolling' && /*#__PURE__*/React.createElement("div", {
+  }, "ROLL"), phase === 'choose' && !allCategoriesChosen() && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      opacity: 0.5
+    }
+  }, twoPlayer ? (() => {
+    const waiting = players.map((p, i) => !p.chosenCategory ? `Player ${i + 1}` : null).filter(Boolean);
+    return `Waiting for ${waiting.join(' & ')} to choose a category...`;
+  })() : 'Choose a category to roll.'), phase === 'rolling' && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 16,
       opacity: 0.6
@@ -1158,185 +1646,32 @@ function Simili() {
   }, "Rolling...")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
-      gap: 16,
-      flexWrap: 'wrap'
+      gap: twoPlayer ? 16 : 0,
+      flexDirection: twoPlayer && !wideLayout ? 'column' : 'row'
     }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: '0 0 auto'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 'bold',
-      marginBottom: 6
-    }
-  }, "Bank"), Array.from({
-    length: TOTAL_ROUNDS
-  }, (_, r) => {
-    const roundDigits = bank.filter(b => b.round === r);
-    const history = roundHistory[r];
-    return /*#__PURE__*/React.createElement("div", {
-      key: r,
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 4,
-        marginBottom: 2,
-        opacity: r > round ? 0.3 : 1
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 13,
-        width: 20,
-        textAlign: 'right'
-      }
-    }, r + 1, "."), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        width: 14,
-        textAlign: 'center',
-        textDecoration: history ? 'underline' : 'none',
-        fontWeight: history ? 'bold' : 'normal'
-      }
-    }, history ? history.category[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 1
-      }
-    }, roundDigits.length > 0 ? roundDigits.map((b, i) => {
-      const globalIdx = bank.indexOf(b);
-      return /*#__PURE__*/React.createElement(BankDigit, {
-        key: i,
-        digit: b.digit,
-        used: b.used,
-        selected: selectedBankIndices.includes(globalIdx),
-        selectable: (phase === 'book' && (bonusBookPhase || bookingsThisRound < maxBooking) || phase === 'endgame-bonus' && bonusBookPhase) && !b.used,
-        onClick: () => toggleBankSelection(globalIdx),
-        crossOut: crossOut
-      });
-    }) : /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        opacity: 0.3,
-        lineHeight: '32px'
-      }
-    }, "\xB7 \xB7 \xB7")));
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 16,
-      flex: 1,
-      minWidth: 0,
-      flexDirection: verticalCategories ? 'column' : 'row'
-    }
-  }, ['sequence', 'matching', 'ladder'].map(cat => {
-    const catLabel = cat.charAt(0).toUpperCase() + cat.slice(1);
-    const scoreInfo = cat === 'sequence' ? 'XYZ=10 / WXYZ=15' : cat === 'matching' ? 'XXX=15 / XXXX=20' : 'XXYY=20 (Y=X±1)';
-    const canBookHere = phase === 'book' && chosenCategory === cat || bonusBookPhase && bonusBookCategories.includes(cat) || phase === 'endgame-bonus' && bonusBookPhase && bonusBookCategories.includes(cat);
-    return /*#__PURE__*/React.createElement("div", {
-      key: cat,
-      style: {
-        flex: 1,
-        minWidth: 0
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginBottom: 4
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 16,
-        fontWeight: 'bold',
-        fontStyle: 'italic'
-      }
-    }, catLabel), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 11,
-        opacity: 0.5
-      }
-    }, scoreInfo)), grids[cat].map((row, rowIdx) => {
-      const rowScore = scoreRow(cat, row, laxPlacement);
-      // For green highlight: only highlight filled cells that contribute to the score
-      const scoringCells = (() => {
-        if (rowScore === 0) return new Set();
-        if (cat === 'ladder') {
-          // All filled cells contribute
-          return new Set(row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1));
-        }
-        if (cat === 'matching') {
-          const filled = row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
-          if (rowScore === 20) return new Set(filled); // 4-matching, all contribute
-          if (laxPlacement) return new Set(filled); // Lax: all filled contribute for 3-matching
-          // Strict 3-matching: find contiguous group of 3
-          for (let start = 0; start <= filled.length - 3; start++) {
-            const group = filled.slice(start, start + 3);
-            if (group[2] - group[0] === 2) return new Set(group);
-          }
-          return new Set();
-        }
-        if (cat === 'sequence') {
-          // Find which cells are part of the scoring sequence
-          const filled = row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
-          if (rowScore === 15 && filled.length === 4) return new Set(filled);
-          // For 3-sequence, find the contiguous group of 3 that scores
-          for (let start = 0; start <= filled.length - 3; start++) {
-            const group = filled.slice(start, start + 3);
-            if (group[2] - group[0] === 2) {
-              const digits = group.map(i => row[i]);
-              if (isValidSequence(digits)) return new Set(group);
-            }
-          }
-          return new Set();
-        }
-        return new Set();
-      })();
-
-      // For yellow clickable: check if the selected digit can actually go here
-      const selectedDigit = selectedBankIndices.length === 1 ? bank[selectedBankIndices[0]].digit : null;
-      const canPlaceInCell = colIdx => {
-        if (!canBookHere || row[colIdx] !== null || selectedDigit === null) return false;
-        if (cat === 'sequence') {
-          const existing = row.map((d, i) => d !== null ? {
-            digit: d,
-            pos: i
-          } : null).filter(Boolean);
-          return canExtendSequence(existing, selectedDigit, colIdx);
-        } else if (cat === 'matching') {
-          const existing = row.filter(c => c !== null);
-          return existing.length === 0 || existing[0] === selectedDigit;
-        } else if (cat === 'ladder') {
-          const newRow = [...row];
-          newRow[colIdx] = selectedDigit;
-          return laxPlacement ? isValidLaxLadderPlacement(newRow) : isValidLadderPlacement(newRow);
-        }
-        return true;
-      };
-      const rowHints = cellHints ? getCellHints(cat, row, laxPlacement) : null;
-      return /*#__PURE__*/React.createElement("div", {
-        key: rowIdx,
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 2,
-          marginBottom: 2
-        }
-      }, row.map((cell, colIdx) => /*#__PURE__*/React.createElement(GridCell, {
-        key: colIdx,
-        value: cell,
-        clickable: canPlaceInCell(colIdx),
-        highlight: scoringCells.has(colIdx),
-        onClick: () => handleBookDigit(cat, rowIdx, colIdx),
-        hints: rowHints ? rowHints[colIdx] : null
-      })), rowScore > 0 && /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontSize: 13,
-          fontWeight: 'bold',
-          color: redInk,
-          marginLeft: 4
-        }
-      }, "+", rowScore));
-    }));
+  }, players.map((ps, idx) => /*#__PURE__*/React.createElement(PlayerSheet, {
+    key: idx,
+    playerIdx: idx,
+    ps: ps,
+    bank: bank,
+    phase: phase,
+    round: round,
+    roundHistory: roundHistory,
+    classicMode: classicMode,
+    laxPlacement: laxPlacement,
+    cellHints: cellHints,
+    crossOut: crossOut,
+    verticalCategories: verticalCategories,
+    onUpdatePlayer: updatePlayer,
+    onToggleBankSelection: toggleBankSelection,
+    onBookDigit: handleBookDigit,
+    onUndo: handleUndo,
+    onEndRound: handleEndRound,
+    onUseBonusBook: handleUseBonusBook,
+    onEndBonusBook: handleEndBonusBook,
+    onEndgameBonusDone: handleEndgameBonusDone,
+    twoPlayer: twoPlayer,
+    redInk: redInk
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
@@ -1360,234 +1695,287 @@ function Simili() {
       borderRadius: 4,
       cursor: 'pointer'
     }
-  }, "Start Game")), (phase === 'book' || phase === 'endgame-bonus') && /*#__PURE__*/React.createElement("div", {
+  }, matchPlay ? 'Start Match' : 'Start Game')), phase === 'gameover' && /*#__PURE__*/React.createElement("div", {
     style: {
-      borderTop: '1px dashed #ccc',
-      paddingTop: 12,
-      marginTop: 8
+      marginTop: 20,
+      padding: 24,
+      textAlign: 'center',
+      background: gameOverInfo.some(g => g.won) ? '#e8f5e9' : '#ffeaa7',
+      border: `2px solid ${gameOverInfo.some(g => g.won) ? '#27ae60' : '#f39c12'}`,
+      borderRadius: 8
     }
-  }, !bonusBookPhase && phase === 'book' && /*#__PURE__*/React.createElement("div", {
+  }, twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 13,
-      marginBottom: 8
+      fontSize: 24,
+      fontWeight: 'bold',
+      marginBottom: 12
     }
-  }, /*#__PURE__*/React.createElement("strong", null, "Booking into ", chosenCategory?.charAt(0).toUpperCase() + chosenCategory?.slice(1)), ' · ', bookingsThisRound, " / ", maxBooking, " booked", ' · ', "Select a digit from the bank, then click a cell in the grid."), bonusBookPhase && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      marginBottom: 8,
-      color: redInk
-    }
-  }, /*#__PURE__*/React.createElement("strong", null, "\uD83C\uDF81 Bonus Book!"), " Place 1 digit into", ' ', bonusBookCategories.length === 3 ? 'any category' : 'Sequence', ". Select a digit, then click a cell.", /*#__PURE__*/React.createElement("button", {
-    onClick: handleEndBonusBook,
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 12,
-      marginLeft: 8,
-      padding: '2px 8px',
-      background: '#eee',
-      border: '1px solid #ccc',
-      borderRadius: 3,
-      cursor: 'pointer'
-    }
-  }, "Cancel")), /*#__PURE__*/React.createElement("div", {
+  }, abandoned ? 'Game Abandoned' : (() => {
+    const p1W = gameOverInfo[0]?.won,
+      p2W = gameOverInfo[1]?.won;
+    const p1S = gameOverInfo[0]?.score || 0,
+      p2S = gameOverInfo[1]?.score || 0;
+    if (p1W && p2W) return p1S > p2S ? 'Player 1 Leads!' : p2S > p1S ? 'Player 2 Leads!' : 'Both Win — Tied!';
+    if (p1W) return 'Player 1 Wins!';
+    if (p2W) return 'Player 2 Wins!';
+    if (gameOverInfo[0]?.unwinnable && gameOverInfo[1]?.unwinnable) return 'This game was impossible to win!';
+    return 'Game Over — Neither Player Won';
+  })()), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
-      gap: 8,
-      flexWrap: 'wrap'
+      justifyContent: 'center',
+      gap: 32,
+      marginBottom: 12
     }
-  }, !bonusBookPhase && phase === 'book' && /*#__PURE__*/React.createElement(React.Fragment, null, seqBonusIIAUnlocked && !seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
-    onClick: () => handleUseBonusBook('A'),
+  }, gameOverInfo.map((g, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 13,
-      padding: '6px 12px',
-      background: '#fffde6',
-      border: '1.5px solid #b8860b',
-      borderRadius: 4,
-      cursor: 'pointer',
-      color: '#8b6914'
-    }
-  }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && seqBonusIIBUnlocked && !seqBonusIIBUsed && /*#__PURE__*/React.createElement("button", {
-    onClick: () => handleUseBonusBook('B'),
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 13,
-      padding: '6px 12px',
-      background: '#fffde6',
-      border: '1.5px solid #b8860b',
-      borderRadius: 4,
-      cursor: 'pointer',
-      color: '#8b6914'
-    }
-  }, "Use Seq Bonus II-B")), !bonusBookPhase && /*#__PURE__*/React.createElement(React.Fragment, null, undoStack.length > 0 && /*#__PURE__*/React.createElement("button", {
-    onClick: handleUndo,
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 13,
-      padding: '6px 14px',
-      background: '#fff',
-      color: '#888',
-      border: '1.5px solid #ccc',
-      borderRadius: 4,
-      cursor: 'pointer',
-      transition: 'all 0.15s'
-    },
-    onMouseEnter: e => {
-      e.target.style.color = '#c0392b';
-      e.target.style.borderColor = '#c0392b';
-    },
-    onMouseLeave: e => {
-      e.target.style.color = '#888';
-      e.target.style.borderColor = '#ccc';
-    }
-  }, "\u21A9 Undo"), /*#__PURE__*/React.createElement("button", {
-    onClick: phase === 'endgame-bonus' ? handleEndgameBonusDone : handleEndRound,
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 14,
-      padding: '6px 20px',
+      fontWeight: 'bold',
+      color: i === 0 ? '#2a6fdb' : '#d4442a'
+    }
+  }, "Player ", i + 1), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 20
+    }
+  }, abandoned ? 'Abandoned' : /*#__PURE__*/React.createElement(React.Fragment, null, g.score, " pts ", g.won ? '✓' : '✗', g.score > 100 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: redInk,
+      fontSize: 14
+    }
+  }, " (\u2665", g.score - 100, ")"))), matchPlay && !abandoned && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      opacity: 0.6
+    }
+  }, "Match pts: ", g.won ? g.score : 0))))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 28,
+      fontWeight: 'bold',
+      marginBottom: 8
+    }
+  }, abandoned ? 'Game Abandoned' : gameOverInfo[0]?.won ? '🎉 YOU WIN!' : gameOverInfo[0]?.unwinnable ? 'This game was impossible to win!' : 'Game Over'), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 20,
+      marginBottom: 4
+    }
+  }, abandoned ? 'Game was Abandoned' : /*#__PURE__*/React.createElement(React.Fragment, null, "Final Score: ", gameOverInfo[0]?.score, gameOverInfo[0]?.score > 100 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: redInk
+    }
+  }, " (\u2665", gameOverInfo[0].score - 100, ")")))), matchPlay && !abandoned && (matchPhase === 'playing' || matchPhase === 'sudden-death') && /*#__PURE__*/React.createElement("button", {
+    onClick: handleMatchNextGame,
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 18,
+      padding: '10px 32px',
       background: '#2a2a2a',
       color: '#fff',
       border: 'none',
-      borderRadius: 4,
+      borderRadius: 6,
       cursor: 'pointer',
-      marginLeft: 'auto'
+      marginTop: 16,
+      letterSpacing: 2
     }
-  }, phase === 'endgame-bonus' ? 'Finish Game' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round')))), phase === 'endgame-bonus' && !bonusBookPhase && (() => {
-    const anyUnused = seqBonusIIAUnlocked && !seqBonusIIAUsed || seqBonusIIBUnlocked && !seqBonusIIBUsed;
-    return /*#__PURE__*/React.createElement("div", {
-      style: {
-        padding: 12,
-        marginTop: 8,
-        background: '#fffde6',
-        border: '1.5px solid #b8860b',
-        borderRadius: 6
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 14,
-        fontWeight: 'bold',
-        color: '#8b6914',
-        marginBottom: 6
-      }
-    }, anyUnused ? 'End of Game — Use remaining Sequence Bonuses!' : 'All Sequence Bonuses used!'), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 8,
-        alignItems: 'center'
-      }
-    }, seqBonusIIAUnlocked && !seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
-      onClick: () => handleUseBonusBook('A'),
-      style: {
-        fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 13,
-        padding: '6px 12px',
-        background: '#fff',
-        border: '1.5px solid #b8860b',
-        borderRadius: 4,
-        cursor: 'pointer'
-      }
-    }, classicMode ? 'Use Bonus II' : 'Use Bonus II-A'), !classicMode && seqBonusIIBUnlocked && !seqBonusIIBUsed && /*#__PURE__*/React.createElement("button", {
-      onClick: () => handleUseBonusBook('B'),
-      style: {
-        fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 13,
-        padding: '6px 12px',
-        background: '#fff',
-        border: '1.5px solid #b8860b',
-        borderRadius: 4,
-        cursor: 'pointer'
-      }
-    }, "Use Bonus II-B"), undoStack.length > 0 && /*#__PURE__*/React.createElement("button", {
-      onClick: handleUndo,
-      style: {
-        fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 13,
-        padding: '6px 14px',
-        background: '#fff',
-        color: '#888',
-        border: '1.5px solid #ccc',
-        borderRadius: 4,
-        cursor: 'pointer'
-      },
-      onMouseEnter: e => {
-        e.target.style.color = '#c0392b';
-        e.target.style.borderColor = '#c0392b';
-      },
-      onMouseLeave: e => {
-        e.target.style.color = '#888';
-        e.target.style.borderColor = '#ccc';
-      }
-    }, "\u21A9 Undo"), /*#__PURE__*/React.createElement("button", {
-      onClick: handleEndgameBonusDone,
-      style: {
-        fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 13,
-        padding: '6px 16px',
-        background: '#2a2a2a',
-        color: '#fff',
-        border: 'none',
-        borderRadius: 4,
-        cursor: 'pointer',
-        marginLeft: 'auto'
-      }
-    }, anyUnused ? 'Skip & Finish' : 'Finish Game')));
-  })(), /*#__PURE__*/React.createElement("div", {
+  }, matchPhase === 'sudden-death' ? 'SEE RESULT' : matchGameNum + 1 >= MATCH_GAMES ? 'SEE MATCH RESULTS' : 'NEXT GAME'), (!matchPlay || abandoned) && /*#__PURE__*/React.createElement("button", {
+    onClick: handleReset,
     style: {
-      borderTop: '1px dashed #ccc',
-      paddingTop: 10,
-      marginTop: 12,
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 18,
+      padding: '10px 32px',
+      background: '#2a2a2a',
+      color: '#fff',
+      border: 'none',
+      borderRadius: 6,
+      cursor: 'pointer',
+      marginTop: 16,
+      letterSpacing: 2
+    }
+  }, "PLAY AGAIN")), matchPlay && matchPhase === 'between' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 20,
+      padding: 24,
+      textAlign: 'center',
+      background: '#e3f2fd',
+      border: '2px solid #1976d2',
+      borderRadius: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 'bold',
+      marginBottom: 12
+    }
+  }, "Game ", matchGameNum + 1, " Complete!"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      marginBottom: 16
+    }
+  }, twoPlayer ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'center',
+      gap: 32
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 'bold',
+      color: '#2a6fdb'
+    }
+  }, "Player 1"), /*#__PURE__*/React.createElement("div", null, "Total: ", matchScores.reduce((s, g) => s + g.p1, 0))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontWeight: 'bold',
+      color: '#d4442a'
+    }
+  }, "Player 2"), /*#__PURE__*/React.createElement("div", null, "Total: ", matchScores.reduce((s, g) => s + (g.p2 || 0), 0)))) : /*#__PURE__*/React.createElement("div", null, "Running Total: ", matchScores.reduce((s, g) => s + g.p1, 0))), /*#__PURE__*/React.createElement("div", {
+    style: {
       fontSize: 12,
+      marginBottom: 12,
       opacity: 0.7
     }
-  }, /*#__PURE__*/React.createElement("strong", null, "Sequence Bonus:"), ' ', /*#__PURE__*/React.createElement("span", {
+  }, matchScores.map((g, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
     style: {
-      color: seqBonusI ? '#27ae60' : '#999'
+      marginRight: 12
     }
-  }, "I ", seqBonusI ? '✓' : '○'), ' · ', classicMode ? /*#__PURE__*/React.createElement("span", {
+  }, "Game ", i + 1, ": ", twoPlayer ? `${g.p1}–${g.p2}` : g.p1))), /*#__PURE__*/React.createElement("button", {
+    onClick: handleMatchContinue,
     style: {
-      color: seqBonusIIAUnlocked ? '#27ae60' : '#999'
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 18,
+      padding: '10px 32px',
+      background: '#2a2a2a',
+      color: '#fff',
+      border: 'none',
+      borderRadius: 6,
+      cursor: 'pointer',
+      letterSpacing: 2
     }
-  }, "II ", seqBonusIIAUnlocked ? seqBonusIIAUsed ? `✓(${seqBonusIIACategory})` : '★' : '○') : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: seqBonusIIAUnlocked ? '#27ae60' : '#999'
-    }
-  }, "II-A ", seqBonusIIAUnlocked ? seqBonusIIAUsed ? `✓(${seqBonusIIACategory})` : '★' : '○'), ' · ', /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: seqBonusIIBUnlocked ? '#27ae60' : '#999'
-    }
-  }, "II-B ", seqBonusIIBUnlocked ? seqBonusIIBUsed ? `✓(${seqBonusIIBCategory})` : '★' : '○')), ' · ', /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: seqBonusIII ? '#27ae60' : '#999'
-    }
-  }, "III ", seqBonusIII ? '✓ (+5)' : '○')), phase === 'gameover' && (() => {
-    const won = !abandoned && currentScore >= 100;
-    const unwinnable = !abandoned && !won && bank.length === 30 && isUnwinnableSequence(bank);
+  }, "START GAME ", matchGameNum + 2)), matchPlay && matchPhase === 'done' && (() => {
+    const result = twoPlayer ? computeMatchResult(matchScores) : null;
+    const p1T = matchScores.reduce((s, g) => s + g.p1, 0);
+    const p2T = twoPlayer ? matchScores.reduce((s, g) => s + (g.p2 || 0), 0) : 0;
     return /*#__PURE__*/React.createElement("div", {
       style: {
         marginTop: 20,
         padding: 24,
         textAlign: 'center',
-        background: won ? '#e8f5e9' : '#ffeaa7',
-        border: `2px solid ${won ? '#27ae60' : '#f39c12'}`,
+        background: '#fff9c4',
+        border: '2px solid #f9a825',
         borderRadius: 8
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 28,
         fontWeight: 'bold',
-        marginBottom: 8
+        marginBottom: 12
       }
-    }, won ? '🎉 YOU WIN!' : unwinnable ? 'This game was impossible to win!' : 'Game Over'), /*#__PURE__*/React.createElement("div", {
+    }, "\uD83C\uDFC6 Match Complete!"), twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'center',
+        gap: 40,
+        marginBottom: 16
+      }
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 'bold',
+        fontSize: 18,
+        color: '#2a6fdb'
+      }
+    }, "Player 1"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 28
+      }
+    }, p1T)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 24,
+        alignSelf: 'center'
+      }
+    }, "vs"), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontWeight: 'bold',
+        fontSize: 18,
+        color: '#d4442a'
+      }
+    }, "Player 2"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 28
+      }
+    }, p2T))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        marginBottom: 12
+      }
+    }, matchScores.map((g, i) => /*#__PURE__*/React.createElement("span", {
+      key: i,
+      style: {
+        marginRight: 12
+      }
+    }, "Game ", i + 1, ": ", g.p1, "\u2013", g.p2))), result.tied ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 12
+      }
+    }, /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 20,
-        marginBottom: 4
+        fontWeight: 'bold'
       }
-    }, abandoned ? 'Game was Abandoned' : /*#__PURE__*/React.createElement(React.Fragment, null, "Final Score: ", currentScore, currentScore > 100 && /*#__PURE__*/React.createElement("span", {
+    }, "Perfect Tie!"), /*#__PURE__*/React.createElement("div", {
       style: {
-        color: redInk
+        fontSize: 13,
+        marginTop: 4
       }
-    }, " (\u2665", currentScore - 100, ")"))), /*#__PURE__*/React.createElement("button", {
+    }, "All games were tied. Play Sudden Death or call it a draw."), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 12,
+        justifyContent: 'center',
+        marginTop: 12
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: handleSuddenDeath,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 16,
+        padding: '8px 24px',
+        background: '#c0392b',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 6,
+        cursor: 'pointer'
+      }
+    }, "\u26A1 SUDDEN DEATH"), /*#__PURE__*/React.createElement("button", {
+      onClick: handleReset,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 16,
+        padding: '8px 24px',
+        background: '#888',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 6,
+        cursor: 'pointer'
+      }
+    }, "Call it a Draw"))) : /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 22,
+        fontWeight: 'bold',
+        marginBottom: 12
+      }
+    }, "Player ", result.winner, " Wins the Match!", result.tiebreak && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 'normal',
+        opacity: 0.7
+      }
+    }, "(by tiebreaker)"))) : /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        marginBottom: 12
+      }
+    }, "Final Total: ", p1T, " points across ", matchScores.length, " games"), (!result || !result.tied) && /*#__PURE__*/React.createElement("button", {
       onClick: handleReset,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -1598,10 +1986,91 @@ function Simili() {
         border: 'none',
         borderRadius: 6,
         cursor: 'pointer',
-        marginTop: 16,
         letterSpacing: 2
       }
-    }, "PLAY AGAIN"));
+    }, "NEW MATCH"));
+  })(), matchPlay && matchPhase === 'sudden-death' && phase === 'gameover' && (() => {
+    const p1S = getPlayerFinalScore(players[0], classicMode, laxPlacement);
+    const p2S = twoPlayer ? getPlayerFinalScore(players[1], classicMode, laxPlacement) : 0;
+    const p1M = p1S >= 100 ? p1S : 0,
+      p2M = p2S >= 100 ? p2S : 0;
+    if (p1M === p2M) {
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginTop: 12,
+          padding: 16,
+          textAlign: 'center',
+          background: '#fff3e0',
+          border: '1.5px solid #e65100',
+          borderRadius: 6
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 16,
+          fontWeight: 'bold',
+          marginBottom: 8
+        }
+      }, "Still Tied! Play another Sudden Death game."), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 8,
+          justifyContent: 'center'
+        }
+      }, /*#__PURE__*/React.createElement("button", {
+        onClick: resetGameState,
+        style: {
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          fontSize: 16,
+          padding: '8px 24px',
+          background: '#c0392b',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 6,
+          cursor: 'pointer'
+        }
+      }, "\u26A1 ANOTHER GAME"), /*#__PURE__*/React.createElement("button", {
+        onClick: handleReset,
+        style: {
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          fontSize: 14,
+          padding: '6px 16px',
+          background: '#888',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 6,
+          cursor: 'pointer'
+        }
+      }, "Call it a Draw")));
+    }
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 12,
+        padding: 16,
+        textAlign: 'center',
+        background: '#e8f5e9',
+        border: '1.5px solid #27ae60',
+        borderRadius: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        marginBottom: 8
+      }
+    }, "\uD83C\uDFC6 Player ", p1M > p2M ? 1 : 2, " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("button", {
+      onClick: handleReset,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 18,
+        padding: '10px 32px',
+        background: '#2a2a2a',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 6,
+        cursor: 'pointer',
+        letterSpacing: 2
+      }
+    }, "NEW MATCH"));
   })(), /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
@@ -1613,7 +2082,6 @@ function Simili() {
     }
   }, (() => {
     const gameActive = phase !== 'pregame' && phase !== 'gameover';
-    const abandonEnabled = gameActive;
     return /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
@@ -1650,10 +2118,17 @@ function Simili() {
         transition: 'all 0.15s'
       }
     }, "\u2699 Settings"), /*#__PURE__*/React.createElement("button", {
-      onClick: abandonEnabled ? () => {
+      onClick: gameActive ? () => {
+        setPlayers(prev => prev.map(p => ({
+          ...p,
+          selectedBankIndices: []
+        })));
         setAbandoned(true);
         setPhase('gameover');
         setSpinning(false);
+        if (matchPlay) {
+          setMatchPhase('done');
+        }
       } : undefined,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -1661,14 +2136,14 @@ function Simili() {
         padding: '4px 0',
         width: 135,
         background: '#fff',
-        color: abandonEnabled ? redInk : '#ccc',
-        border: `1.5px solid ${abandonEnabled ? redInk : '#ddd'}`,
+        color: gameActive ? redInk : '#ccc',
+        border: `1.5px solid ${gameActive ? redInk : '#ddd'}`,
         borderRadius: 4,
-        cursor: abandonEnabled ? 'pointer' : 'default',
+        cursor: gameActive ? 'pointer' : 'default',
         transition: 'all 0.15s',
-        opacity: abandonEnabled ? 1 : 0.5
+        opacity: gameActive ? 1 : 0.5
       }
-    }, "\u2715 Abandon Game"));
+    }, matchPlay ? '✕ Abandon Match' : '✕ Abandon Game'));
   })(), showSettings && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8,
@@ -1739,7 +2214,7 @@ function Simili() {
       letterSpacing: 0,
       fontStyle: 'italic'
     }
-  }, "\u2014 start a new game to change")), /*#__PURE__*/React.createElement("div", {
+  }, "\u2014 ", matchPlay ? 'start a new match' : 'start a new game', " to change")), /*#__PURE__*/React.createElement("div", {
     style: {
       opacity: phase === 'pregame' ? 1 : 0.4,
       pointerEvents: phase === 'pregame' ? 'auto' : 'none'
@@ -1777,10 +2252,8 @@ function Simili() {
     leftLabel: "Strict Placement",
     rightLabel: "Lax Placement"
   })))))));
-}
-
-// Mount the app
-ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(Simili));
+};
   </script>
+  <script>const root = ReactDOM.createRoot(document.getElementById('root'));root.render(React.createElement(window.Simili));</script>
 </body>
 </html>
