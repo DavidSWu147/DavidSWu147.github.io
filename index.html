@@ -1612,7 +1612,8 @@ function PlayerSheet({
     }, r < round && history ? ps.chosenCategory && r === round ? ps.chosenCategory[0].toUpperCase() : roundHistory[r] ? roundHistory[r].categories?.[playerIdx]?.[0]?.toUpperCase() || '·' : '·' : r === round && ps.chosenCategory ? ps.chosenCategory[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
-        gap: 1
+        gap: 1,
+        minWidth: 94
       }
     }, roundDigits.length > 0 ? roundDigits.map((b, i) => {
       const globalIdx = startIdx + i;
@@ -3015,7 +3016,7 @@ window.Simili = function Simili() {
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: verticalCategories,
     onChange: setVerticalCategories,
-    leftLabel: "Side by side",
+    leftLabel: "Side by Side",
     rightLabel: "Stacked"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
