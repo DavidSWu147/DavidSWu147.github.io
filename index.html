@@ -781,11 +781,27 @@ function runSearch(ctx, unusedDigits) {
         if (mainUsed + opt.slots > maxBook) continue;
       } else {
         // Dynamic bonus unlock: fires when a bonus book completes a sequence row,
-        // regardless of chosen category. Only triggers if threshold is NEWLY crossed
-        // (not already met at base state — if already met, it would have been unlocked already).
+        // regardless of chosen category. Only triggers if:
+        // 1. Threshold is NEWLY crossed (not already met at base state)
+        // 2. When category !== 'sequence', sequence completions require bonus books,
+        //    so unlocking a new bonus requires having spent a pre-existing one first.
+        //    The newly unlocked bonus only becomes available after the triggering
+        //    completion, so it can't fund itself. We check that the bonus books used
+        //    for sequence rows (bonusSeqUsed) are fundable from pre-existing bonusBooks.
         let effectiveBonusMax = bonusBooks;
-        if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + new4Seq + rowOptSeq3Gain[idx][oi] >= 5) effectiveBonusMax++;
-        if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + n4s >= 4) effectiveBonusMax++;
+        // How many bonus-funded sequence completions have happened + would this be one?
+        const thisBonusSeq = !isChosenCat && rowCat[idx] === 'sequence' ? bonusSeqUsed + opt.slots : bonusSeqUsed;
+        if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + new4Seq + rowOptSeq3Gain[idx][oi] >= 5) {
+          // II-A unlock: only if a pre-existing bonus funded the sequence work
+          // When category === 'sequence', sequence completions use main slots (free).
+          // When category !== 'sequence', they use bonus slots and need pre-existing books.
+          if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
+        }
+        if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + n4s >= 4) {
+          // II-B unlock: same check. Also need II-A to have been unlocked/available first
+          // for there to be a bonus book path to complete enough sequences.
+          if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
+        }
         const newBonusUsed = bonusUsed + opt.slots;
         if (newBonusUsed > effectiveBonusMax) continue;
 
