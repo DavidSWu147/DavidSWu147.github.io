@@ -4,20 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIMILI</title>
-<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 </head>
 <body>
 <div id="root"></div>
 <script>
-const {
-  useState,
-  useEffect,
-  useRef,
-  useCallback
-} = React;
-
+const { useState, useEffect, useRef, useCallback } = React;
 // ============================================================
 // SIMILI - A Dice Game by David Wu
 // ============================================================
@@ -314,10 +307,14 @@ function createPlayerState() {
     roundDone: false
   };
 }
-function getPlayerFinalScore(ps, classicMode, laxPlacement) {
+function hasQuadBonus(grids, laxPlacement) {
+  return grids.matching.some(row => scoreMatchingRow(row, laxPlacement) >= 20);
+}
+function getPlayerFinalScore(ps, classicMode, laxPlacement, quadBonusEnabled) {
   const grids = ps.grids;
   const seqBonusIII = classicMode ? hasSequenceBonusIII(grids) : hasModernBonusIII(grids, laxPlacement);
-  return totalScore(grids, laxPlacement) + (seqBonusIII ? 5 : 0);
+  const qb = quadBonusEnabled && hasQuadBonus(grids, laxPlacement) ? 1 : 0;
+  return totalScore(grids, laxPlacement) + (seqBonusIII ? 5 : 0) + qb;
 }
 
 // --- Round 10 Win Chance & Outs Computation ---
@@ -400,7 +397,8 @@ function getSequenceRowMovesOpt(row) {
             scoreGain: newScore - currentScore,
             digitCost: cost,
             slots: toPlace.length,
-            makes4Seq: newScore === 15
+            makes4Seq: newScore === 15,
+            makes3PlusSeq: currentScore < 10 && newScore >= 10
           });
         }
       }
@@ -428,7 +426,8 @@ function getMatchingRowMovesOpt(row, laxPlacement) {
             digit: targetD,
             count: add,
             slots: add,
-            makes4Seq: false
+            makes4Seq: false,
+            makes3PlusSeq: false
           });
         }
       } else {
@@ -452,7 +451,8 @@ function getMatchingRowMovesOpt(row, laxPlacement) {
             digit: targetD,
             count: add,
             slots: add,
-            makes4Seq: false
+            makes4Seq: false,
+            makes3PlusSeq: false
           });
         }
       }
@@ -464,14 +464,16 @@ function getMatchingRowMovesOpt(row, laxPlacement) {
       scoreGain: 15,
       count: 3,
       slots: 3,
-      makes4Seq: false
+      makes4Seq: false,
+      makes3PlusSeq: false
     });
     moves.push({
       type: 'matchAny',
       scoreGain: 20,
       count: 4,
       slots: 4,
-      makes4Seq: false
+      makes4Seq: false,
+      makes3PlusSeq: false
     });
   }
   return moves;
@@ -488,7 +490,8 @@ function getLadderRowMovesOpt(row, laxPlacement) {
       type: 'ladderAny',
       scoreGain: 20,
       slots: 4,
-      makes4Seq: false
+      makes4Seq: false,
+      makes3PlusSeq: false
     }];
   }
 
@@ -530,7 +533,8 @@ function getLadderRowMovesOpt(row, laxPlacement) {
           scoreGain: newScore - currentScore,
           digitCost: cost,
           slots,
-          makes4Seq: false
+          makes4Seq: false,
+          makes3PlusSeq: false
         });
       }
     }
@@ -586,6 +590,26 @@ function buildSearchContext(grids, category, maxBook, bonusBooks, bonusConstrain
   const baseSeq4Count = countCompletedSequences4(grids);
   const baseMatchAll20 = grids.matching.every(row => scoreMatchingRow(row, laxPlacement) >= 20);
   const baseLadderAll20 = grids.ladder.every(row => scoreLadderRow(row, laxPlacement) >= 20);
+  // When dynamic bonus unlocks are possible (II-A or II-B not yet unlocked),
+  // chosen-category rows must be processed before non-chosen rows. This ensures
+  // that sequence completions (which trigger unlocks) happen before the search
+  // tries to use bonus books on non-chosen rows. Within each group, preserve
+  // the existing sort order (fewest options first, best score gain).
+  const needsUnlockSort = !seqBonusIIAUnlocked || !classicMode && !seqBonusIIBUnlocked;
+  if (needsUnlockSort) {
+    // Stable sort: chosen-category rows first, then non-chosen
+    const indexed = rowMoves.map((rm, i) => ({
+      rm,
+      origIdx: i
+    }));
+    indexed.sort((a, b) => {
+      const aChosen = a.rm.cat === category ? 0 : 1;
+      const bChosen = b.rm.cat === category ? 0 : 1;
+      if (aChosen !== bChosen) return aChosen - bChosen;
+      return a.origIdx - b.origIdx; // preserve original sort within group
+    });
+    rowMoves = indexed.map(x => x.rm);
+  }
   const nRows = rowMoves.length;
   const matchingNot20 = [];
   const ladderNot20 = [];
@@ -624,16 +648,6 @@ function buildSearchContext(grids, category, maxBook, bonusBooks, bonusConstrain
       rowScoreFor20[i] = 20 - scoreLadderRow(grids.ladder[rowIdx], laxPlacement);
     }
   }
-  const rowOptSeq3Gain = [];
-  for (let i = 0; i < nRows; i++) {
-    const {
-      cat,
-      rowIdx,
-      options
-    } = rowMoves[i];
-    const flags = options.map(opt => cat === 'sequence' && opt.scoreGain >= 10 && scoreSequenceRow(grids.sequence[rowIdx]) < 10 ? 1 : 0);
-    rowOptSeq3Gain.push(flags);
-  }
 
   // The at-least-one-Sequence constraint only applies in Modern when 2+ total bonus books
   // could be used (pre-existing + dynamically unlocked).
@@ -654,7 +668,6 @@ function buildSearchContext(grids, category, maxBook, bonusBooks, bonusConstrain
     rowMatchNot20Idx,
     rowLadderNot20Idx,
     rowScoreFor20,
-    rowOptSeq3Gain,
     rowCat,
     category,
     maxBook,
@@ -688,7 +701,6 @@ function runSearch(ctx, unusedDigits) {
     rowMatchNot20Idx,
     rowLadderNot20Idx,
     rowScoreFor20,
-    rowOptSeq3Gain,
     rowCat,
     category,
     maxBook,
@@ -702,7 +714,7 @@ function runSearch(ctx, unusedDigits) {
   let found = false;
   const pool = new Int8Array(10);
   for (const d of unusedDigits) pool[d]++;
-  function tryApply(opt, idx, mainUsed, bonusUsed, scoreGain, n4s, mN, lN, isChosenCat, bonusSeqUsed) {
+  function tryApply(opt, idx, mainUsed, bonusUsed, scoreGain, n4s, n3ps, mN, lN, isChosenCat, bonusSeqUsed) {
     const newMain = mainUsed + (isChosenCat ? opt.slots : 0);
     const newBonus = bonusUsed + (isChosenCat ? 0 : opt.slots);
     const newScore = scoreGain + opt.scoreGain;
@@ -711,19 +723,19 @@ function runSearch(ctx, unusedDigits) {
       const dc = opt.digitCost;
       for (let d = 0; d <= 9; d++) if (dc[d] > pool[d]) return;
       for (let d = 0; d <= 9; d++) pool[d] -= dc[d];
-      search(idx + 1, newMain, newBonus, newScore, n4s, mN, lN, newBonusSeq);
+      search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
       for (let d = 0; d <= 9; d++) pool[d] += dc[d];
     } else if (opt.type === 'matchFixed') {
       if (pool[opt.digit] < opt.count) return;
       pool[opt.digit] -= opt.count;
-      search(idx + 1, newMain, newBonus, newScore, n4s, mN, lN, newBonusSeq);
+      search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
       pool[opt.digit] += opt.count;
     } else if (opt.type === 'matchAny') {
       for (let d = 0; d <= 9; d++) {
         if (found) return;
         if (pool[d] >= opt.count) {
           pool[d] -= opt.count;
-          search(idx + 1, newMain, newBonus, newScore, n4s, mN, lN, newBonusSeq);
+          search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
           pool[d] += opt.count;
         }
       }
@@ -734,14 +746,14 @@ function runSearch(ctx, unusedDigits) {
         if (pool[p] >= 2 && pool[y] >= 2) {
           pool[p] -= 2;
           pool[y] -= 2;
-          search(idx + 1, newMain, newBonus, newScore, n4s, mN, lN, newBonusSeq);
+          search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
           pool[p] += 2;
           pool[y] += 2;
         }
       }
     }
   }
-  function search(idx, mainUsed, bonusUsed, scoreGain, new4Seq, mNot20, lNot20, bonusSeqUsed) {
+  function search(idx, mainUsed, bonusUsed, scoreGain, new4Seq, new3PlusSeq, mNot20, lNot20, bonusSeqUsed) {
     if (found) return;
     let bonusIII = baseBonusIII;
     if (!bonusIII) {
@@ -762,7 +774,7 @@ function runSearch(ctx, unusedDigits) {
     if (effectiveScore + suffixMax[idx] + 5 < neededScore) return;
 
     // Skip this row
-    search(idx + 1, mainUsed, bonusUsed, scoreGain, new4Seq, mNot20, lNot20, bonusSeqUsed);
+    search(idx + 1, mainUsed, bonusUsed, scoreGain, new4Seq, new3PlusSeq, mNot20, lNot20, bonusSeqUsed);
     if (found) return;
     const {
       cat,
@@ -777,6 +789,7 @@ function runSearch(ctx, unusedDigits) {
       if (found) return;
       const opt = options[oi];
       const n4s = new4Seq + (opt.makes4Seq ? 1 : 0);
+      const n3ps = new3PlusSeq + (opt.makes3PlusSeq ? 1 : 0);
       if (isChosenCat) {
         if (mainUsed + opt.slots > maxBook) continue;
       } else {
@@ -791,7 +804,7 @@ function runSearch(ctx, unusedDigits) {
         let effectiveBonusMax = bonusBooks;
         // How many bonus-funded sequence completions have happened + would this be one?
         const thisBonusSeq = !isChosenCat && rowCat[idx] === 'sequence' ? bonusSeqUsed + opt.slots : bonusSeqUsed;
-        if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + new4Seq + rowOptSeq3Gain[idx][oi] >= 5) {
+        if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + n3ps >= 5) {
           // II-A unlock: only if a pre-existing bonus funded the sequence work
           // When category === 'sequence', sequence completions use main slots (free).
           // When category !== 'sequence', they use bonus slots and need pre-existing books.
@@ -826,10 +839,10 @@ function runSearch(ctx, unusedDigits) {
       let lN = lNot20;
       if (rowMatchNot20Idx[idx] >= 0 && opt.scoreGain >= rowScoreFor20[idx]) mN--;
       if (rowLadderNot20Idx[idx] >= 0 && opt.scoreGain >= rowScoreFor20[idx]) lN--;
-      tryApply(opt, idx, mainUsed, bonusUsed, scoreGain, n4s, mN, lN, isChosenCat, bonusSeqUsed);
+      tryApply(opt, idx, mainUsed, bonusUsed, scoreGain, n4s, n3ps, mN, lN, isChosenCat, bonusSeqUsed);
     }
   }
-  search(0, 0, 0, 0, 0, matchingNot20.length, ladderNot20.length, 0);
+  search(0, 0, 0, 0, 0, 0, matchingNot20.length, ladderNot20.length, 0);
   return found;
 }
 
@@ -1398,7 +1411,8 @@ function PlayerSheet({
   onEndgameBonusDone,
   twoPlayer,
   redInk,
-  winChances
+  winChances,
+  quadBonus
 }) {
   const grids = ps.grids;
   const seqBonusI = hasSequenceBonusI(grids);
@@ -1932,7 +1946,14 @@ function PlayerSheet({
     style: {
       color: seqBonusIII ? '#27ae60' : '#999'
     }
-  }, "III ", seqBonusIII ? '✓ (+5)' : '○')));
+  }, "III ", seqBonusIII ? '✓ (+5)' : '○'), quadBonus && (() => {
+    const earned = hasQuadBonus(grids, laxPlacement);
+    return /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Quad Bonus:"), ' ', /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: earned ? '#27ae60' : '#999'
+      }
+    }, earned ? '✓ (+1)' : '○'));
+  })()));
 }
 
 // --- Main Game Component ---
@@ -1945,6 +1966,7 @@ window.Simili = function Simili() {
   const [twoPlayer, setTwoPlayer] = useState(false);
   const [matchPlay, setMatchPlay] = useState(false);
   const [classicMode, setClassicMode] = useState(false);
+  const [quadBonus, setQuadBonus] = useState(false);
   const [laxPlacement, setLaxPlacement] = useState(false);
   const [seedRolls, setSeedRolls] = useState(() => {
     try {
@@ -2229,8 +2251,10 @@ window.Simili = function Simili() {
   // --- Match Play Logic ---
   const handleMatchNextGame = () => {
     const scores = players.map(p => {
-      const s = getPlayerFinalScore(p, classicMode, laxPlacement);
-      return s >= 100 ? s : 0;
+      const s = getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus);
+      if (s >= 100) return s;
+      if (quadBonus && hasQuadBonus(p.grids, laxPlacement)) return 1;
+      return 0;
     });
     const newScores = [...matchScores, twoPlayer ? {
       p1: scores[0],
@@ -2323,13 +2347,15 @@ window.Simili = function Simili() {
   const inkColor = '#2a2a2a';
   const redInk = '#c0392b';
   const gameOverInfo = phase === 'gameover' ? players.map(p => {
-    const score = getPlayerFinalScore(p, classicMode, laxPlacement);
+    const score = getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus);
     const won = !abandoned && score >= 100;
     const unwinnable = !abandoned && !won && bank.length === 30 && isUnwinnableSequence(bank);
+    const quadBonusEarned = quadBonus && hasQuadBonus(p.grids, laxPlacement);
     return {
       score,
       won,
-      unwinnable
+      unwinnable,
+      quadBonusEarned
     };
   }) : [];
   return /*#__PURE__*/React.createElement("div", {
@@ -2512,7 +2538,8 @@ window.Simili = function Simili() {
     onEndgameBonusDone: handleEndgameBonusDone,
     twoPlayer: twoPlayer,
     redInk: redInk,
-    winChances: round10WinChances ? round10WinChances[idx] : null
+    winChances: round10WinChances ? round10WinChances[idx] : null,
+    quadBonus: quadBonus
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
@@ -2590,7 +2617,7 @@ window.Simili = function Simili() {
       fontSize: 12,
       opacity: 0.6
     }
-  }, "Match pts: ", g.won ? g.score : 0))))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "Match pts: ", g.won ? g.score : g.quadBonusEarned ? 1 : 0))))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 28,
       fontWeight: 'bold',
@@ -2605,7 +2632,12 @@ window.Simili = function Simili() {
     style: {
       color: redInk
     }
-  }, " (\u2665", gameOverInfo[0].score - 100, ")")))), matchPlay && !abandoned && (matchPhase === 'playing' || matchPhase === 'sudden-death') && /*#__PURE__*/React.createElement("button", {
+  }, " (\u2665", gameOverInfo[0].score - 100, ")"))), matchPlay && !abandoned && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      opacity: 0.6
+    }
+  }, "Match pts: ", gameOverInfo[0]?.won ? gameOverInfo[0]?.score : gameOverInfo[0]?.quadBonusEarned ? 1 : 0)), matchPlay && !abandoned && (matchPhase === 'playing' || matchPhase === 'sudden-death') && /*#__PURE__*/React.createElement("button", {
     onClick: handleMatchNextGame,
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2831,10 +2863,10 @@ window.Simili = function Simili() {
       }
     }, "NEW MATCH"));
   })(), matchPlay && matchPhase === 'sudden-death' && phase === 'gameover' && (() => {
-    const p1S = getPlayerFinalScore(players[0], classicMode, laxPlacement);
-    const p2S = twoPlayer ? getPlayerFinalScore(players[1], classicMode, laxPlacement) : 0;
-    const p1M = p1S >= 100 ? p1S : 0,
-      p2M = p2S >= 100 ? p2S : 0;
+    const p1S = getPlayerFinalScore(players[0], classicMode, laxPlacement, quadBonus);
+    const p2S = twoPlayer ? getPlayerFinalScore(players[1], classicMode, laxPlacement, quadBonus) : 0;
+    const p1M = p1S >= 100 ? p1S : quadBonus && hasQuadBonus(players[0].grids, laxPlacement) ? 1 : 0;
+    const p2M = p2S >= 100 ? p2S : twoPlayer && quadBonus && hasQuadBonus(players[1].grids, laxPlacement) ? 1 : 0;
     if (p1M === p2M) {
       return /*#__PURE__*/React.createElement("div", {
         style: {
@@ -3079,6 +3111,15 @@ window.Simili = function Simili() {
       marginTop: 8
     }
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: quadBonus,
+    onChange: setQuadBonus,
+    leftLabel: "Quad Bonus Off",
+    rightLabel: "Quad Bonus On"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: classicMode,
     onChange: setClassicMode,
     leftLabel: "Modern Version",
@@ -3095,8 +3136,7 @@ window.Simili = function Simili() {
   })))))));
 };
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(React.createElement(window.Simili));
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(window.Simili));
 </script>
 </body>
 </html>
