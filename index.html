@@ -1245,9 +1245,11 @@ function GridCell({
 function ScoreTrack({
   score,
   bonusIII,
-  crossOut
+  crossOut,
+  quadBonusPoints
 }) {
   const adjustedScore = score + (bonusIII ? 5 : 0);
+  const displayScore = adjustedScore + (quadBonusPoints || 0);
   const trackNumbers = [];
   for (let i = 0; i <= 90; i += 10) trackNumbers.push(i);
   const trackNumbers2 = [];
@@ -1318,17 +1320,17 @@ function ScoreTrack({
       fontSize: 14,
       color: '#c0392b',
       fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontWeight: adjustedScore > 100 ? 'normal' : 'bold',
+      fontWeight: displayScore > 100 ? 'normal' : 'bold',
       minWidth: 26,
       textAlign: 'center',
       position: 'relative',
-      top: adjustedScore > 100 ? 0 : -1.5,
+      top: displayScore > 100 ? 0 : -1.5,
       marginLeft: -5.5,
       display: 'inline-block',
-      transform: adjustedScore > 100 ? 'none' : 'scale(1.25)',
+      transform: displayScore > 100 ? 'none' : 'scale(1.25)',
       transformOrigin: 'center center'
     }
-  }, adjustedScore > 100 ? adjustedScore : '♥')));
+  }, displayScore > 100 ? displayScore : '♥')));
 }
 
 // --- Toggle Switch ---
@@ -1468,7 +1470,8 @@ function PlayerSheet({
   }, /*#__PURE__*/React.createElement(ScoreTrack, {
     score: rawScore,
     bonusIII: seqBonusIII,
-    crossOut: crossOut
+    crossOut: crossOut,
+    quadBonusPoints: phase === 'gameover' && currentScore >= 100 && quadBonus && hasQuadBonus(grids, laxPlacement) ? 1 : 0
   }), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 16,
@@ -1948,12 +1951,12 @@ function PlayerSheet({
     }
   }, "III ", seqBonusIII ? '✓ (+5)' : '○'), quadBonus && (() => {
     const earned = hasQuadBonus(grids, laxPlacement);
-    return /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Quad Bonus:"), ' ', /*#__PURE__*/React.createElement("span", {
+    return /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Quad Bonus"), ' ', /*#__PURE__*/React.createElement("span", {
       style: {
         color: earned ? '#27ae60' : '#999'
       }
     }, earned ? '✓ (+1)' : '○'));
-  })()));
+  })(), laxPlacement && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Lax Placement On"))));
 }
 
 // --- Main Game Component ---
