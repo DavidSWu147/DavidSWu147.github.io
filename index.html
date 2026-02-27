@@ -1460,11 +1460,11 @@ function PlayerSheet({
       fontSize: 16,
       fontWeight: 'bold'
     }
-  }, "Score: ", currentScore, " / 100")), (phase === 'choose' || phase === 'book' || phase === 'rolling') && /*#__PURE__*/React.createElement("div", {
+  }, "Score: ", currentScore, " / 100")), (phase === 'choose' || phase === 'book' || phase === 'rolling' || phase === 'endgame-bonus' || phase === 'gameover') && ps.chosenCategory && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 12
     }
-  }, phase === 'choose' && /*#__PURE__*/React.createElement("div", {
+  }, phase !== 'endgame-bonus' && phase !== 'gameover' && /*#__PURE__*/React.createElement(React.Fragment, null, phase === 'choose' && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 14,
       marginBottom: 6,
@@ -1500,7 +1500,7 @@ function PlayerSheet({
       marginTop: 4,
       opacity: 0.6
     }
-  }, ps.chosenCategory ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder'), round === TOTAL_ROUNDS - 1 && (phase === 'choose' || phase === 'rolling' || phase === 'book' || phase === 'endgame-bonus') && winChances && ps.chosenCategory && (() => {
+  }, ps.chosenCategory ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (() => {
     const info = winChances[ps.chosenCategory];
     if (!info) return null;
     const pct = info.winPct;
@@ -1525,7 +1525,46 @@ function PlayerSheet({
         marginTop: 2
       }
     }, !isZero && !isFull && info.outs ? info.outs + ' ' : '', "to win"));
-  })()), /*#__PURE__*/React.createElement("div", {
+  })()), phase === 'choose' && !ps.chosenCategory && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      marginBottom: 6,
+      textAlign: 'center'
+    }
+  }, "Choose your category:"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      justifyContent: 'center'
+    }
+  }, ['sequence', 'matching', 'ladder'].map(cat => /*#__PURE__*/React.createElement("button", {
+    key: cat,
+    onClick: () => onUpdatePlayer(playerIdx, {
+      chosenCategory: cat
+    }),
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 16,
+      padding: '6px 16px',
+      background: '#fff',
+      color: '#2a2a2a',
+      border: '2px solid #2a2a2a',
+      borderRadius: 4,
+      cursor: 'pointer',
+      transition: 'all 0.15s'
+    }
+  }, cat[0].toUpperCase()))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      textAlign: 'center',
+      marginTop: 4,
+      opacity: 0.6
+    }
+  }, "S = Sequence \xB7 M = Matching \xB7 L = Ladder")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 12,
