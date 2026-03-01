@@ -304,7 +304,8 @@ function createPlayerState() {
     bonusBookPhase: false,
     bonusBookSource: null,
     undoStack: [],
-    roundDone: false
+    roundDone: false,
+    bookedPerRound: []
   };
 }
 function hasQuadBonus(grids, laxPlacement) {
@@ -715,10 +716,20 @@ function runSearch(ctx, unusedDigits) {
   const pool = new Int8Array(10);
   for (const d of unusedDigits) pool[d]++;
   function tryApply(opt, idx, mainUsed, bonusUsed, scoreGain, n4s, n3ps, mN, lN, isChosenCat, bonusSeqUsed) {
-    const newMain = mainUsed + (isChosenCat ? opt.slots : 0);
-    const newBonus = bonusUsed + (isChosenCat ? 0 : opt.slots);
+    let newMain, newBonus;
+    if (isChosenCat) {
+      const mainAvail = maxBook - mainUsed;
+      const mainSlots = Math.min(opt.slots, mainAvail);
+      const bonusSlots = opt.slots - mainSlots;
+      newMain = mainUsed + mainSlots;
+      newBonus = bonusUsed + bonusSlots;
+    } else {
+      newMain = mainUsed;
+      newBonus = bonusUsed + opt.slots;
+    }
     const newScore = scoreGain + opt.scoreGain;
-    const newBonusSeq = !isChosenCat && rowCat[idx] === 'sequence' ? bonusSeqUsed + opt.slots : bonusSeqUsed;
+    const bonusSlotsOnSeq = rowCat[idx] === 'sequence' ? isChosenCat ? opt.slots - Math.min(opt.slots, maxBook - mainUsed) : opt.slots : 0;
+    const newBonusSeq = bonusSeqUsed + (bonusSlotsOnSeq > 0 ? bonusSlotsOnSeq : 0);
     if (opt.type === 'concrete') {
       const dc = opt.digitCost;
       for (let d = 0; d <= 9; d++) if (dc[d] > pool[d]) return;
@@ -783,38 +794,38 @@ function runSearch(ctx, unusedDigits) {
     const isChosenCat = cat === category;
     const mainRem = maxBook - mainUsed;
     const bonusRem = bonusBooks - bonusUsed;
-    if (isChosenCat && rowMinSlots[idx] > mainRem) return;
+    // For chosen-cat rows, can also use bonus books if dynamically unlocked
+    // Use bonusBooks (base) + up to 2 possible unlocks as upper bound
+    if (isChosenCat && rowMinSlots[idx] > mainRem + Math.max(0, bonusBooks + 2 - bonusUsed)) return;
     if (!isChosenCat && rowMinSlots[idx] > bonusRem + 2) return;
     for (let oi = 0; oi < options.length; oi++) {
       if (found) return;
       const opt = options[oi];
       const n4s = new4Seq + (opt.makes4Seq ? 1 : 0);
       const n3ps = new3PlusSeq + (opt.makes3PlusSeq ? 1 : 0);
+
+      // Compute effective bonus books available (including dynamic unlocks)
+      let effectiveBonusMax = bonusBooks;
+      if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + n3ps >= 5) {
+        if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
+      }
+      if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + n4s >= 4) {
+        if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
+      }
       if (isChosenCat) {
-        if (mainUsed + opt.slots > maxBook) continue;
+        // Chosen category: use main slots first, overflow to bonus books
+        const slotsNeeded = opt.slots;
+        const mainAvail = maxBook - mainUsed;
+        if (slotsNeeded <= mainAvail) {
+          // Fits in main slots, no bonus needed
+        } else {
+          // Need some bonus book slots for the overflow
+          const bonusNeeded = slotsNeeded - mainAvail;
+          if (mainAvail < 0) continue; // already over main limit
+          const newBonusUsed = bonusUsed + bonusNeeded;
+          if (newBonusUsed > effectiveBonusMax) continue;
+        }
       } else {
-        // Dynamic bonus unlock: fires when a bonus book completes a sequence row,
-        // regardless of chosen category. Only triggers if:
-        // 1. Threshold is NEWLY crossed (not already met at base state)
-        // 2. When category !== 'sequence', sequence completions require bonus books,
-        //    so unlocking a new bonus requires having spent a pre-existing one first.
-        //    The newly unlocked bonus only becomes available after the triggering
-        //    completion, so it can't fund itself. We check that the bonus books used
-        //    for sequence rows (bonusSeqUsed) are fundable from pre-existing bonusBooks.
-        let effectiveBonusMax = bonusBooks;
-        // How many bonus-funded sequence completions have happened + would this be one?
-        const thisBonusSeq = !isChosenCat && rowCat[idx] === 'sequence' ? bonusSeqUsed + opt.slots : bonusSeqUsed;
-        if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + n3ps >= 5) {
-          // II-A unlock: only if a pre-existing bonus funded the sequence work
-          // When category === 'sequence', sequence completions use main slots (free).
-          // When category !== 'sequence', they use bonus slots and need pre-existing books.
-          if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
-        }
-        if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + n4s >= 4) {
-          // II-B unlock: same check. Also need II-A to have been unlocked/available first
-          // for there to be a bonus book path to complete enough sequences.
-          if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
-        }
         const newBonusUsed = bonusUsed + opt.slots;
         if (newBonusUsed > effectiveBonusMax) continue;
 
@@ -1477,7 +1488,7 @@ function PlayerSheet({
       fontSize: 16,
       fontWeight: 'bold'
     }
-  }, "Score: ", currentScore, " / 100")), (phase === 'choose' || phase === 'book' || phase === 'rolling' || phase === 'endgame-bonus' || phase === 'gameover') && ps.chosenCategory && /*#__PURE__*/React.createElement("div", {
+  }, "Score: ", currentScore + (phase === 'gameover' && quadBonus && hasQuadBonus(grids, laxPlacement) ? 1 : 0), " / 100")), (phase === 'choose' || phase === 'book' || phase === 'rolling' || phase === 'endgame-bonus' || phase === 'gameover') && ps.chosenCategory && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 12
     }
@@ -1960,8 +1971,55 @@ function PlayerSheet({
 }
 
 // --- Main Game Component ---
+// Format booked digits for game log display
+function formatBookedNotation(bookings) {
+  if (!bookings || bookings.length === 0) return '—';
+  const rowLetters = ['A', 'B', 'C', 'D', 'E'];
+  const catLetters = {
+    sequence: 'S',
+    matching: 'M',
+    ladder: 'L'
+  };
+
+  // Separate regular bookings from bonus bookings
+  const regular = bookings.filter(b => !b.bonusSource);
+  const bonusA = bookings.filter(b => b.bonusSource === 'A');
+  const bonusB = bookings.filter(b => b.bonusSource === 'B');
+
+  // Sort regular bookings: by rowIdx first, then colIdx within same row
+  const sortedRegular = [...regular].sort((a, b) => a.rowIdx - b.rowIdx || a.colIdx - b.colIdx);
+
+  // Format a single booking entry
+  const fmt = b => {
+    const isOuter = b.colIdx === 0 || b.colIdx === 3;
+    const letter = isOuter ? rowLetters[b.rowIdx] : rowLetters[b.rowIdx].toLowerCase();
+    return `${letter}${b.digit}`;
+  };
+
+  // Format bonus booking: category letter (always uppercase) + row letter + digit
+  const fmtBonus = b => {
+    const catLetter = catLetters[b.category];
+    const isOuter = b.colIdx === 0 || b.colIdx === 3;
+    const letter = isOuter ? rowLetters[b.rowIdx] : rowLetters[b.rowIdx].toLowerCase();
+    return `${catLetter}${letter}${b.digit}`;
+  };
+  let result = sortedRegular.map(fmt).join('');
+  if (bonusA.length > 0) {
+    const sortedA = [...bonusA].sort((a, b) => a.rowIdx - b.rowIdx || a.colIdx - b.colIdx);
+    result += ' ' + sortedA.map(fmtBonus).join('');
+  }
+  if (bonusB.length > 0) {
+    const sortedB = [...bonusB].sort((a, b) => a.rowIdx - b.rowIdx || a.colIdx - b.colIdx);
+    result += ' ' + sortedB.map(fmtBonus).join('');
+  }
+  return result.trim() || '—';
+}
 window.Simili = function Simili() {
   const [showSettings, setShowSettings] = useState(false);
+  const [showGameLogs, setShowGameLogs] = useState(false);
+  const [showStatistics, setShowStatistics] = useState(false);
+  const [logPageIndex, setLogPageIndex] = useState(-1); // -1 means latest page
+  const [statsPageIndex, setStatsPageIndex] = useState(0);
   const [wideLayout, setWideLayout] = useState(false);
   const [verticalCategories, setVerticalCategories] = useState(false);
   const [cellHints, setCellHints] = useState(false);
@@ -1971,23 +2029,38 @@ window.Simili = function Simili() {
   const [classicMode, setClassicMode] = useState(false);
   const [quadBonus, setQuadBonus] = useState(false);
   const [laxPlacement, setLaxPlacement] = useState(false);
-  const [seedRolls, setSeedRolls] = useState(() => {
+  const [seedRolls, setSeedRolls] = useState(null);
+  const [isSeededGame, setIsSeededGame] = useState(false);
+  const allSeedsRef = useRef(null);
+  if (allSeedsRef.current === null) {
     try {
       const params = new URLSearchParams(window.location.search);
-      const seed = params.get('seed');
-      if (seed && /^\d{30}$/.test(seed)) {
-        const rolls = [];
-        for (let i = 0; i < 30; i += 3) rolls.push([parseInt(seed[i]), parseInt(seed[i + 1]), parseInt(seed[i + 2])]);
-        return rolls;
+      const seeds = [];
+      for (let i = 1; i <= 4; i++) {
+        const key = i === 1 ? params.get('seed1') || params.get('seed') : params.get(`seed${i}`);
+        if (key && /^\d{30}$/.test(key)) {
+          const rolls = [];
+          for (let j = 0; j < 30; j += 3) rolls.push([parseInt(key[j]), parseInt(key[j + 1]), parseInt(key[j + 2])]);
+          seeds.push(rolls);
+        } else {
+          seeds.push(null);
+        }
       }
-    } catch (e) {}
-    return null;
-  });
+      allSeedsRef.current = seeds;
+    } catch (e) {
+      allSeedsRef.current = [null, null, null, null];
+    }
+  }
+  const gameNumberRef = useRef(0); // tracks total games started (0-indexed) for seed selection
 
   // Match Play state
   const [matchGameNum, setMatchGameNum] = useState(0);
+  const singleGameCounterRef = useRef(0);
+  const matchCounterRef = useRef(0);
+  const logGroupIdRef = useRef(0);
   const [matchScores, setMatchScores] = useState([]); // [{p1, p2?}, ...]
   const [matchPhase, setMatchPhase] = useState('playing'); // 'playing'|'between'|'done'|'sudden-death'
+  const [matchAbandoned, setMatchAbandoned] = useState(false);
 
   // Game state (shared)
   const [round, setRound] = useState(0);
@@ -1997,6 +2070,7 @@ window.Simili = function Simili() {
   const [spinning, setSpinning] = useState(false);
   const [bank, setBank] = useState([]);
   const [roundHistory, setRoundHistory] = useState([]);
+  const [gameLogs, setGameLogs] = useState([]);
 
   // Round 10 win chances (computed at start of round 10)
   const [round10WinChances, setRound10WinChances] = useState(null); // array per player: [{sequence:{winPct,outs}, matching:{...}, ladder:{...}}, ...]
@@ -2056,7 +2130,8 @@ window.Simili = function Simili() {
           bankUsed: [...p.bankUsed, false, false, false],
           bookingsThisRound: 0,
           undoStack: [],
-          roundDone: false
+          roundDone: false,
+          bookedPerRound: [...p.bookedPerRound, []]
         })));
         return newBank;
       });
@@ -2113,7 +2188,8 @@ window.Simili = function Simili() {
         seqBonusIIAUnlocked: p.seqBonusIIAUnlocked,
         seqBonusIIBUnlocked: p.seqBonusIIBUnlocked,
         seqBonusIIACategory: p.seqBonusIIACategory,
-        seqBonusIIBCategory: p.seqBonusIIBCategory
+        seqBonusIIBCategory: p.seqBonusIIBCategory,
+        bookedPerRound: p.bookedPerRound.map(arr => [...arr])
       };
       const newGrids = {
         ...p.grids
@@ -2128,6 +2204,16 @@ window.Simili = function Simili() {
         selectedBankIndices: [],
         undoStack: [...p.undoStack, snapshot]
       };
+      // Track booked digit for game log
+      const bookingEntry = {
+        digit,
+        category,
+        rowIdx,
+        colIdx,
+        bonusSource: isBonusBook ? p.bonusBookSource : null
+      };
+      const updatedBooked = p.bookedPerRound.map((arr, i) => i === p.bookedPerRound.length - 1 ? [...arr, bookingEntry] : arr);
+      ns.bookedPerRound = updatedBooked;
       if (hasSequenceBonusIIA(newGrids) && !p.seqBonusIIAUnlocked) ns.seqBonusIIAUnlocked = true;
       if (!classicMode && hasSequenceBonusIIB(newGrids) && !p.seqBonusIIBUnlocked) ns.seqBonusIIBUnlocked = true;
       if (isBonusBook) {
@@ -2165,6 +2251,7 @@ window.Simili = function Simili() {
         selectedBankIndices: [],
         bonusBookPhase: phase === 'endgame-bonus' ? false : s.bonusBookPhase,
         bonusBookSource: phase === 'endgame-bonus' ? null : s.bonusBookSource,
+        bookedPerRound: s.bookedPerRound.map(arr => [...arr]),
         undoStack: p.undoStack.slice(0, -1)
       };
     });
@@ -2206,6 +2293,7 @@ window.Simili = function Simili() {
           };
         }));
       } else {
+        matchPhaseAtGameEndRef.current = matchPhase;
         setPhase('gameover');
       }
     } else {
@@ -2230,7 +2318,10 @@ window.Simili = function Simili() {
   // Advance endgame-bonus
   useEffect(() => {
     if (phase !== 'endgame-bonus') return;
-    if (players.every(p => p.roundDone)) setPhase('gameover');
+    if (players.every(p => p.roundDone)) {
+      matchPhaseAtGameEndRef.current = matchPhase;
+      setPhase('gameover');
+    }
   }, [players, phase]);
   const handleUseBonusBook = (playerIdx, source) => {
     updatePlayer(playerIdx, {
@@ -2250,6 +2341,55 @@ window.Simili = function Simili() {
       selectedBankIndices: []
     });
   };
+
+  // Save game log on gameover
+  const gameLogSavedRef = useRef(false);
+  const matchPhaseAtGameEndRef = useRef(matchPhase);
+  useEffect(() => {
+    if (phase === 'gameover' && !gameLogSavedRef.current) {
+      gameLogSavedRef.current = true;
+      const logEntry = {
+        timestamp: Date.now(),
+        rounds: roundHistory.map((rh, r) => ({
+          roll: rh.roll,
+          categories: rh.categories
+        })),
+        players: players.map(p => ({
+          grids: {
+            sequence: p.grids.sequence.map(r => [...r]),
+            matching: p.grids.matching.map(r => [...r]),
+            ladder: p.grids.ladder.map(r => [...r])
+          },
+          bankUsed: [...p.bankUsed],
+          bookedPerRound: p.bookedPerRound.map(arr => [...arr]),
+          score: getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus),
+          won: getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus) >= 100,
+          seqBonusIIAUsed: p.seqBonusIIAUsed,
+          seqBonusIIACategory: p.seqBonusIIACategory,
+          seqBonusIIBUsed: p.seqBonusIIBUsed,
+          seqBonusIIBCategory: p.seqBonusIIBCategory
+        })),
+        abandoned,
+        matchGame: matchPlay ? matchGameNum + 1 : null,
+        matchNumber: matchPlay ? matchCounterRef.current : null,
+        singleGameNumber: !matchPlay ? singleGameCounterRef.current : null,
+        logGroupId: logGroupIdRef.current,
+        isSuddenDeath: matchPhaseAtGameEndRef.current === 'sudden-death',
+        isSeeded: isSeededGame,
+        matchAbandoned: matchAbandoned,
+        settings: {
+          classicMode,
+          laxPlacement,
+          quadBonus,
+          twoPlayer,
+          matchPlay
+        }
+      };
+      if (!matchPlay) singleGameCounterRef.current++;
+      setGameLogs(prev => [...prev, logEntry]);
+    }
+    if (phase !== 'gameover') gameLogSavedRef.current = false;
+  }, [phase]);
 
   // --- Match Play Logic ---
   const handleMatchNextGame = () => {
@@ -2283,6 +2423,9 @@ window.Simili = function Simili() {
     }
   };
   const resetGameState = () => {
+    gameNumberRef.current++;
+    const seedIdx = gameNumberRef.current;
+    const seed = seedIdx < 4 ? allSeedsRef.current[seedIdx] : null;
     setRound(0);
     setPhase('choose');
     setAbandoned(false);
@@ -2291,7 +2434,8 @@ window.Simili = function Simili() {
     setBank([]);
     setRoundHistory([]);
     setPlayers(twoPlayer ? [createPlayerState(), createPlayerState()] : [createPlayerState()]);
-    setSeedRolls(null);
+    setSeedRolls(seed);
+    setIsSeededGame(!!seed);
     setRound10WinChances(null);
   };
   const handleMatchContinue = () => {
@@ -2304,6 +2448,7 @@ window.Simili = function Simili() {
     resetGameState();
   };
   const handleReset = () => {
+    gameNumberRef.current = 0;
     setRound(0);
     setPhase('pregame');
     setAbandoned(false);
@@ -2313,10 +2458,16 @@ window.Simili = function Simili() {
     setRoundHistory([]);
     setPlayers(twoPlayer ? [createPlayerState(), createPlayerState()] : [createPlayerState()]);
     setSeedRolls(null);
+    setIsSeededGame(false);
     setMatchGameNum(0);
     setMatchScores([]);
     setMatchPhase('playing');
+    setMatchAbandoned(false);
     setRound10WinChances(null);
+    if (matchPlay) {
+      matchCounterRef.current++;
+      logGroupIdRef.current++;
+    }
   };
   const computeMatchResult = scores => {
     const p1Total = scores.reduce((s, g) => s + g.p1, 0);
@@ -2553,8 +2704,14 @@ window.Simili = function Simili() {
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => {
+      const seedIdx = gameNumberRef.current;
+      const seed = seedIdx < 4 ? allSeedsRef.current[seedIdx] : null;
+      setSeedRolls(seed);
+      setIsSeededGame(!!seed);
       setPhase('choose');
       setShowSettings(false);
+      setShowGameLogs(false);
+      setShowStatistics(false);
     },
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2586,7 +2743,7 @@ window.Simili = function Simili() {
       p2W = gameOverInfo[1]?.won;
     const p1S = gameOverInfo[0]?.score || 0,
       p2S = gameOverInfo[1]?.score || 0;
-    if (p1W && p2W) return p1S > p2S ? 'Player 1 Leads!' : p2S > p1S ? 'Player 2 Leads!' : 'Both Win — Tied!';
+    if (p1W && p2W) return p1S > p2S ? 'Both Win — Player 1 Wins More!' : p2S > p1S ? 'Both Win — Player 2 Wins More!' : 'Both Win — Tied!';
     if (p1W) return 'Player 1 Wins!';
     if (p2W) return 'Player 2 Wins!';
     if (gameOverInfo[0]?.unwinnable && gameOverInfo[1]?.unwinnable) return 'This game was impossible to win!';
@@ -2737,8 +2894,8 @@ window.Simili = function Simili() {
         marginTop: 20,
         padding: 24,
         textAlign: 'center',
-        background: '#fff9c4',
-        border: '2px solid #f9a825',
+        background: matchAbandoned ? '#ffeaa7' : '#fff9c4',
+        border: `2px solid ${matchAbandoned ? '#f39c12' : '#f9a825'}`,
         borderRadius: 8
       }
     }, /*#__PURE__*/React.createElement("div", {
@@ -2747,7 +2904,7 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 12
       }
-    }, "\uD83C\uDFC6 Match Complete!"), twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    }, matchAbandoned ? 'Match Abandoned' : '🏆 Match Complete!'), twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         justifyContent: 'center',
@@ -2789,7 +2946,7 @@ window.Simili = function Simili() {
       style: {
         marginRight: 12
       }
-    }, "Game ", i + 1, ": ", g.p1, "\u2013", g.p2))), result.tied ? /*#__PURE__*/React.createElement("div", {
+    }, "Game ", i + 1, ": ", g.p1, "\u2013", g.p2))), !matchAbandoned && result.tied ? /*#__PURE__*/React.createElement("div", {
       style: {
         marginBottom: 12
       }
@@ -2834,7 +2991,7 @@ window.Simili = function Simili() {
         borderRadius: 6,
         cursor: 'pointer'
       }
-    }, "Call it a Draw"))) : /*#__PURE__*/React.createElement("div", {
+    }, "Call it a Draw"))) : !matchAbandoned ? /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 22,
         fontWeight: 'bold',
@@ -2846,12 +3003,12 @@ window.Simili = function Simili() {
         fontWeight: 'normal',
         opacity: 0.7
       }
-    }, "(by tiebreaker)"))) : /*#__PURE__*/React.createElement("div", {
+    }, "(by tiebreaker)")) : null) : /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 20,
         marginBottom: 12
       }
-    }, "Final Total: ", p1T, " points across ", matchScores.length, " games"), (!result || !result.tied) && /*#__PURE__*/React.createElement("button", {
+    }, "Final Total: ", p1T, " points across ", matchScores.length, " game", matchScores.length !== 1 ? 's' : ''), (!result || !result.tied || matchAbandoned) && /*#__PURE__*/React.createElement("button", {
       onClick: handleReset,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2957,66 +3114,114 @@ window.Simili = function Simili() {
       alignItems: 'center'
     }
   }, (() => {
-    const gameActive = phase !== 'pregame' && phase !== 'gameover';
+    const gameActive = phase !== 'pregame' && (phase !== 'gameover' || matchPlay && matchPhase !== 'done');
+    const btnBase = {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 13,
+      padding: '4px 0',
+      width: 125,
+      background: '#fff',
+      color: '#888',
+      border: '1.5px solid #999',
+      borderRadius: 4,
+      cursor: 'pointer',
+      transition: 'all 0.15s'
+    };
     return /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
-        gap: 8,
+        gap: 6,
         alignItems: 'center',
-        justifyContent: 'center'
+        justifyContent: 'center',
+        flexWrap: 'wrap'
       }
     }, /*#__PURE__*/React.createElement("button", {
       onClick: () => window.open('SIMILI_RULES.pdf', 'simili_rules'),
-      style: {
-        fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 13,
-        padding: '4px 0',
-        width: 135,
-        background: '#fff',
-        color: '#888',
-        border: '1.5px solid #999',
-        borderRadius: 4,
-        cursor: 'pointer',
-        transition: 'all 0.15s'
-      }
+      style: btnBase
     }, "? How to Play"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => setShowSettings(prev => !prev),
+      onClick: () => setShowStatistics(prev => {
+        if (!prev) {
+          setShowSettings(false);
+          setShowGameLogs(false);
+        }
+        return !prev;
+      }),
       style: {
-        fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 13,
-        padding: '4px 0',
-        width: 135,
+        ...btnBase,
+        background: showStatistics ? '#2a2a2a' : '#fff',
+        color: showStatistics ? '#fff' : '#888',
+        border: `1.5px solid ${showStatistics ? '#2a2a2a' : '#999'}`
+      }
+    }, "\uD83D\uDCCA Statistics"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setShowSettings(prev => {
+        if (!prev) {
+          setShowGameLogs(false);
+          setShowStatistics(false);
+        }
+        return !prev;
+      }),
+      style: {
+        ...btnBase,
         background: showSettings ? '#2a2a2a' : '#fff',
         color: showSettings ? '#fff' : '#888',
-        border: `1.5px solid ${showSettings ? '#2a2a2a' : '#999'}`,
-        borderRadius: 4,
-        cursor: 'pointer',
-        transition: 'all 0.15s'
+        border: `1.5px solid ${showSettings ? '#2a2a2a' : '#999'}`
       }
     }, "\u2699 Settings"), /*#__PURE__*/React.createElement("button", {
+      onClick: () => setShowGameLogs(prev => {
+        if (!prev) {
+          setShowSettings(false);
+          setShowStatistics(false);
+          setLogPageIndex(-1);
+        }
+        return !prev;
+      }),
+      style: {
+        ...btnBase,
+        background: showGameLogs ? '#2a2a2a' : '#fff',
+        color: showGameLogs ? '#fff' : '#888',
+        border: `1.5px solid ${showGameLogs ? '#2a2a2a' : '#999'}`
+      }
+    }, "\uD83D\uDCCB Game Logs"), /*#__PURE__*/React.createElement("button", {
       onClick: gameActive ? () => {
-        setPlayers(prev => prev.map(p => ({
-          ...p,
-          selectedBankIndices: []
-        })));
-        setAbandoned(true);
-        setPhase('gameover');
-        setSpinning(false);
-        if (matchPlay) {
+        matchPhaseAtGameEndRef.current = matchPhase;
+        if (matchPlay && phase === 'gameover') {
+          // Abandoning match at gameover: end match, but don't change game state
+          // Only add match points if not already added (i.e. not in 'between' phase)
+          if (matchPhase !== 'between') {
+            const scores = players.map(p => {
+              const s = getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus);
+              if (s >= 100) return s;
+              if (quadBonus && hasQuadBonus(p.grids, laxPlacement)) return 1;
+              return 0;
+            });
+            setMatchScores(prev => [...prev, twoPlayer ? {
+              p1: scores[0],
+              p2: scores[1]
+            } : {
+              p1: scores[0]
+            }]);
+          }
+          setMatchAbandoned(true);
           setMatchPhase('done');
+        } else {
+          setPlayers(prev => prev.map(p => ({
+            ...p,
+            selectedBankIndices: []
+          })));
+          setAbandoned(true);
+          setPhase('gameover');
+          setSpinning(false);
+          if (matchPlay) {
+            setMatchAbandoned(true);
+            setMatchPhase('done');
+          }
         }
       } : undefined,
       style: {
-        fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 13,
-        padding: '4px 0',
-        width: 135,
-        background: '#fff',
+        ...btnBase,
         color: gameActive ? redInk : '#ccc',
         border: `1.5px solid ${gameActive ? redInk : '#ddd'}`,
-        borderRadius: 4,
         cursor: gameActive ? 'pointer' : 'default',
-        transition: 'all 0.15s',
         opacity: gameActive ? 1 : 0.5
       }
     }, matchPlay ? '✕ Abandon Match' : '✕ Abandon Game'));
@@ -3114,15 +3319,6 @@ window.Simili = function Simili() {
       marginTop: 8
     }
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
-    checked: quadBonus,
-    onChange: setQuadBonus,
-    leftLabel: "Quad Bonus Off",
-    rightLabel: "Quad Bonus On"
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: classicMode,
     onChange: setClassicMode,
     leftLabel: "Modern Version",
@@ -3132,11 +3328,403 @@ window.Simili = function Simili() {
       marginTop: 8
     }
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: quadBonus,
+    onChange: setQuadBonus,
+    leftLabel: "Quad Bonus Off",
+    rightLabel: "Quad Bonus On"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: laxPlacement,
     onChange: setLaxPlacement,
     leftLabel: "Strict Placement",
     rightLabel: "Lax Placement"
-  })))))));
+  })))), showGameLogs && (() => {
+    // Group game logs into pages:
+    // - Match regular games: grouped by logGroupId, non-SD, up to 4 per page
+    // - Match sudden death games: grouped by logGroupId, SD, all on one page (up to 4)
+    // - Single games: grouped only by twoPlayer, up to 4 per page
+    //   (player count change forces new page)
+    const pages = [];
+    let currentPage = [];
+    let prevGroupId = null;
+    let prevIsSD = null;
+    let prevTwoPlayer = null;
+    let prevIsMatch = null;
+    for (const log of gameLogs) {
+      const isSD = log.isSuddenDeath;
+      const gid = log.logGroupId;
+      const tp = log.settings.twoPlayer;
+      const isMatch = log.matchNumber != null;
+      let needsNewPage = false;
+      if (currentPage.length >= 4) {
+        needsNewPage = true;
+      } else if (tp !== prevTwoPlayer && prevTwoPlayer !== null) {
+        needsNewPage = true;
+      } else if (isMatch !== prevIsMatch && prevIsMatch !== null) {
+        needsNewPage = true;
+      } else if (isMatch && (gid !== prevGroupId || isSD !== prevIsSD)) {
+        needsNewPage = true;
+      }
+      if (needsNewPage && currentPage.length > 0) {
+        pages.push(currentPage);
+        currentPage = [];
+      }
+      currentPage.push(log);
+      prevGroupId = gid;
+      prevIsSD = isSD;
+      prevTwoPlayer = tp;
+      prevIsMatch = isMatch;
+    }
+    if (currentPage.length > 0) pages.push(currentPage);
+    const totalPages = pages.length;
+    const activeIdx = logPageIndex < 0 || logPageIndex >= totalPages ? totalPages - 1 : logPageIndex;
+    const activePage = pages[activeIdx] || [];
+    const goPrev = () => setLogPageIndex(activeIdx <= 0 ? totalPages - 1 : activeIdx - 1);
+    const goNext = () => setLogPageIndex(activeIdx >= totalPages - 1 ? 0 : activeIdx + 1);
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8,
+        padding: '12px 16px',
+        background: '#faf6ed',
+        border: '1px solid #ddd',
+        borderRadius: 6,
+        width: '100%',
+        maxWidth: 600
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 'bold',
+        opacity: 0.5,
+        textTransform: 'uppercase',
+        letterSpacing: 1
+      }
+    }, "Game Logs"), totalPages > 1 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center'
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: goPrev,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 13,
+        padding: '1px 8px',
+        background: '#fff',
+        color: '#888',
+        border: '1.5px solid #999',
+        borderRadius: 4,
+        cursor: 'pointer'
+      }
+    }, "\u25C0"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        opacity: 0.5
+      }
+    }, activeIdx + 1, " / ", totalPages), /*#__PURE__*/React.createElement("button", {
+      onClick: goNext,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 13,
+        padding: '1px 8px',
+        background: '#fff',
+        color: '#888',
+        border: '1.5px solid #999',
+        borderRadius: 4,
+        cursor: 'pointer'
+      }
+    }, "\u25B6"))), gameLogs.length === 0 ? /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        opacity: 0.5,
+        fontStyle: 'italic'
+      }
+    }, "No completed games yet.") : activePage.map((log, li) => {
+      let gameLabel;
+      if (log.isSuddenDeath) {
+        const sdIndex = activePage.slice(0, li + 1).filter(l => l.isSuddenDeath).length;
+        gameLabel = `Sudden Death Game ${sdIndex}`;
+      } else if (log.matchNumber != null) {
+        gameLabel = `Match ${log.matchNumber + 1} Game ${log.matchGame}`;
+      } else {
+        gameLabel = `Game ${log.singleGameNumber + 1}`;
+      }
+      return /*#__PURE__*/React.createElement("div", {
+        key: li,
+        style: {
+          marginBottom: li < activePage.length - 1 ? 12 : 0,
+          paddingBottom: li < activePage.length - 1 ? 12 : 0,
+          borderBottom: li < activePage.length - 1 ? '1px dashed #ddd' : 'none'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12,
+          fontWeight: 'bold',
+          marginBottom: 2
+        }
+      }, gameLabel, /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontWeight: 'normal',
+          fontSize: 11,
+          opacity: 0.6
+        }
+      }, ' ', "(", [log.settings.quadBonus ? 'Quad Bonus On' : 'Quad Bonus Off', log.settings.classicMode ? 'Classic' : 'Modern', log.settings.laxPlacement ? 'Lax Pl.' : 'Strict Pl.'].join(', '), ")"), log.abandoned ? ' (Abandoned)' : '', " \u2014 ", log.players.map((p, pi) => {
+        const label = log.settings.twoPlayer ? `P${pi + 1}: ` : '';
+        return `${label}${p.score} pts${p.won ? ' ✓' : ' ✗'}`;
+      }).join(' · ')), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 11,
+          fontFamily: "'Special Elite', 'Courier New', monospace"
+        }
+      }, /*#__PURE__*/React.createElement("table", {
+        style: {
+          borderCollapse: 'collapse',
+          width: '100%',
+          tableLayout: 'fixed'
+        }
+      }, /*#__PURE__*/React.createElement("colgroup", null, log.settings.twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '15%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '10%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '10%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '15%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '25%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '25%'
+        }
+      })) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '20%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '20%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '25%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '35%'
+        }
+      }))), /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+        style: {
+          borderBottom: '1px solid #ddd'
+        }
+      }, /*#__PURE__*/React.createElement("th", {
+        style: {
+          textAlign: 'left',
+          padding: '2px 4px',
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, "Round"), log.settings.twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("th", {
+        style: {
+          textAlign: 'left',
+          padding: '2px 4px',
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, "P1"), /*#__PURE__*/React.createElement("th", {
+        style: {
+          textAlign: 'left',
+          padding: '2px 4px',
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, "P2")) : /*#__PURE__*/React.createElement("th", {
+        style: {
+          textAlign: 'left',
+          padding: '2px 4px',
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, "Category"), /*#__PURE__*/React.createElement("th", {
+        style: {
+          textAlign: 'left',
+          padding: '2px 4px',
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, "Roll"), log.settings.twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("th", {
+        style: {
+          textAlign: 'left',
+          padding: '2px 4px',
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, "P1 Booked"), /*#__PURE__*/React.createElement("th", {
+        style: {
+          textAlign: 'left',
+          padding: '2px 4px',
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, "P2 Booked")) : /*#__PURE__*/React.createElement("th", {
+        style: {
+          textAlign: 'left',
+          padding: '2px 4px',
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, "Booked"))), /*#__PURE__*/React.createElement("tbody", null, log.rounds.map((rd, ri) => /*#__PURE__*/React.createElement("tr", {
+        key: ri,
+        style: {
+          borderBottom: '1px solid #f0ebe0'
+        }
+      }, /*#__PURE__*/React.createElement("td", {
+        style: {
+          padding: '1px 4px',
+          opacity: 0.5
+        }
+      }, ri + 1), log.settings.twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("td", {
+        style: {
+          padding: '1px 4px'
+        }
+      }, (rd.categories[0] || '·')[0].toUpperCase()), /*#__PURE__*/React.createElement("td", {
+        style: {
+          padding: '1px 4px'
+        }
+      }, (rd.categories[1] || '·')[0].toUpperCase())) : /*#__PURE__*/React.createElement("td", {
+        style: {
+          padding: '1px 4px'
+        }
+      }, (rd.categories[0] || '·')[0].toUpperCase()), /*#__PURE__*/React.createElement("td", {
+        style: {
+          padding: '1px 4px'
+        }
+      }, rd.roll.join('')), log.settings.twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("td", {
+        style: {
+          padding: '1px 4px'
+        }
+      }, formatBookedNotation(log.players[0].bookedPerRound[ri])), /*#__PURE__*/React.createElement("td", {
+        style: {
+          padding: '1px 4px'
+        }
+      }, formatBookedNotation(log.players[1].bookedPerRound[ri]))) : /*#__PURE__*/React.createElement("td", {
+        style: {
+          padding: '1px 4px'
+        }
+      }, formatBookedNotation(log.players[0].bookedPerRound[ri]))))))));
+    }));
+  })(), showStatistics && (() => {
+    const statsPages = ['1 Player, Single Game, Modern Version', '1 Player, Single Game, Classic Version', '1 Player, Match Play, Modern Version', '1 Player, Match Play, Classic Version', 'Quad Bonuses, 1 Player', '2 Players, Single Game, Modern Version', '2 Players, Single Game, Classic Version', '2 Players, Match Play, Modern Version', '2 Players, Match Play, Classic Version', 'Quad Bonuses, 2 Players'];
+    const totalStatsPages = statsPages.length;
+    const si = statsPageIndex >= 0 && statsPageIndex < totalStatsPages ? statsPageIndex : 0;
+    const goStatsPrev = () => setStatsPageIndex(si <= 0 ? totalStatsPages - 1 : si - 1);
+    const goStatsNext = () => setStatsPageIndex(si >= totalStatsPages - 1 ? 0 : si + 1);
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 8,
+        padding: '12px 16px',
+        background: '#faf6ed',
+        border: '1px solid #ddd',
+        borderRadius: 6,
+        width: '100%',
+        maxWidth: 600
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 'bold',
+        opacity: 0.5,
+        textTransform: 'uppercase',
+        letterSpacing: 1
+      }
+    }, "Statistics"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center'
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: goStatsPrev,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 13,
+        padding: '1px 8px',
+        background: '#fff',
+        color: '#888',
+        border: '1.5px solid #999',
+        borderRadius: 4,
+        cursor: 'pointer'
+      }
+    }, "\u25C0"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 10,
+        opacity: 0.5
+      }
+    }, si + 1, " / ", totalStatsPages), /*#__PURE__*/React.createElement("button", {
+      onClick: goStatsNext,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 13,
+        padding: '1px 8px',
+        background: '#fff',
+        color: '#888',
+        border: '1.5px solid #999',
+        borderRadius: 4,
+        cursor: 'pointer'
+      }
+    }, "\u25B6"))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 'bold',
+        marginBottom: 8
+      }
+    }, statsPages[si]), /*#__PURE__*/React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        fontSize: 11,
+        fontFamily: "'Special Elite', 'Courier New', monospace"
+      }
+    }, /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", {
+      style: {
+        borderBottom: '1px solid #ddd'
+      }
+    }, /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '4px',
+        opacity: 0.4,
+        fontStyle: 'italic'
+      },
+      colSpan: 2
+    }, "No data yet.")))));
+  })())));
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(window.Simili));
