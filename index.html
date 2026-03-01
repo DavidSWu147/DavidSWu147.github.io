@@ -2051,7 +2051,7 @@ window.Simili = function Simili() {
       allSeedsRef.current = [null, null, null, null];
     }
   }
-  const gameNumberRef = useRef(0); // tracks total games started (0-indexed) for seed selection
+  const gameNumberRef = useRef(-1); // tracks total games started (incremented before each game start)
 
   // Match Play state
   const [matchGameNum, setMatchGameNum] = useState(0);
@@ -2448,7 +2448,6 @@ window.Simili = function Simili() {
     resetGameState();
   };
   const handleReset = () => {
-    gameNumberRef.current = 0;
     setRound(0);
     setPhase('pregame');
     setAbandoned(false);
@@ -2704,6 +2703,7 @@ window.Simili = function Simili() {
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => {
+      gameNumberRef.current++;
       const seedIdx = gameNumberRef.current;
       const seed = seedIdx < 4 ? allSeedsRef.current[seedIdx] : null;
       setSeedRolls(seed);
