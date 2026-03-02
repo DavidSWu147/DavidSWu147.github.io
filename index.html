@@ -2534,18 +2534,16 @@ window.Simili = function Simili() {
     if (audioRef.current) audioRef.current.volume = musicVolume;
   }, [musicVolume]);
 
-  // Start/stop music based on game phase and volume
+  // Start/stop music based on volume only
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    const gameInProgress = phase !== 'pregame' && phase !== 'gameover';
-    const shouldPlay = gameInProgress && musicVolume > 0;
-    if (shouldPlay) {
+    if (musicVolume > 0) {
       audio.play().catch(() => {});
     } else {
       audio.pause();
     }
-  }, [phase, musicVolume]);
+  }, [musicVolume]);
   useEffect(() => {
     if (phase === 'pregame') {
       setPlayers(twoPlayer ? [createPlayerState(), createPlayerState()] : [createPlayerState()]);
