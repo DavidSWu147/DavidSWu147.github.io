@@ -2130,7 +2130,16 @@ function encodeStats(rollStats, gameStats, quadStats) {
     encodeVarInt(bytes, qs.qbGetP2);
   }
 
-  // Convert bytes to base-36 via BigInt
+  // Checksum over all data bytes (before trimming)
+  let cksum = 0;
+  for (const b of bytes) cksum = (cksum + b) % 251;
+
+  // Trim trailing zeros for compact encoding, store original length + checksum at front
+  while (bytes.length > 0 && bytes[bytes.length - 1] === 0) bytes.pop();
+  // Prepend: total original length info is implicit from data structure, just append checksum
+  bytes.push(cksum);
+
+  // Convert bytes to base-36 via BigInt (last byte = least significant, so trailing zeros gone)
   let bigVal = 0n;
   for (let i = bytes.length - 1; i >= 0; i--) bigVal = bigVal * 256n + BigInt(bytes[i]);
   return bigVal.toString(36).toUpperCase();
@@ -2149,11 +2158,26 @@ function decodeStats(str) {
       bytes.push(Number(bigVal & 0xFFn));
       bigVal >>= 8n;
     }
-    if (bytes.length === 0 || bytes[0] !== 1) return null; // version check
+    // Last byte pushed is the checksum (it was appended after trimming)
+    if (bytes.length < 2 || bytes[0] !== 1) return null; // version check
 
+    // Extract checksum (last element in the encoded stream = last pushed during decode)
+    const storedCksum = bytes.pop();
+
+    // Pad with zeros to full expected length for checksum verification
+    // Compute checksum over current bytes (which may be short due to trimmed zeros)
+    // The original checksum was computed over the FULL byte array before trimming,
+    // so we need to know the full length. Instead, just verify what we have:
+    // Re-derive: checksum was computed before trimming, but trimmed bytes were all 0,
+    // so they don't affect the sum. Checksum of trimmed array === checksum of full array.
+    let cksum = 0;
+    for (const b of bytes) cksum = (cksum + b) % 251;
+    if (cksum !== storedCksum) return null;
     const pos = {
       i: 1
     };
+    // Pad with zeros to ensure varint reads don't go out of bounds
+    while (bytes.length < 600) bytes.push(0);
     const d = () => decodeVarInt(bytes, pos);
     const rollStats = {
       games: d(),
@@ -2321,6 +2345,8 @@ window.Simili = function Simili() {
   const [wideLayout, setWideLayout] = useState(false);
   const [verticalCategories, setVerticalCategories] = useState(false);
   const [cellHints, setCellHints] = useState(false);
+  const [musicVolume, setMusicVolume] = useState(0); // 0 to 1
+
   const [crossOut, setCrossOut] = useState(false);
   const [twoPlayer, setTwoPlayer] = useState(false);
   const [matchPlay, setMatchPlay] = useState(false);
@@ -2489,6 +2515,37 @@ window.Simili = function Simili() {
 
   // Player states
   const [players, setPlayers] = useState([createPlayerState()]);
+
+  // --- Background Music Engine ---
+  const audioRef = useRef(null);
+  useEffect(() => {
+    const audio = new Audio('music.mp3');
+    audio.loop = true;
+    audio.volume = 0;
+    audioRef.current = audio;
+    return () => {
+      audio.pause();
+      audio.src = '';
+    };
+  }, []);
+
+  // Update volume
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = musicVolume;
+  }, [musicVolume]);
+
+  // Start/stop music based on game phase and volume
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const gameInProgress = phase !== 'pregame' && phase !== 'gameover';
+    const shouldPlay = gameInProgress && musicVolume > 0;
+    if (shouldPlay) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  }, [phase, musicVolume]);
   useEffect(() => {
     if (phase === 'pregame') {
       setPlayers(twoPlayer ? [createPlayerState(), createPlayerState()] : [createPlayerState()]);
@@ -3927,7 +3984,7 @@ window.Simili = function Simili() {
       textTransform: 'uppercase',
       letterSpacing: 1
     }
-  }, "Display"), /*#__PURE__*/React.createElement(ToggleSwitch, {
+  }, "Display/Audio"), /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: wideLayout,
     onChange: setWideLayout,
     leftLabel: "Narrow (mobile)",
@@ -3960,6 +4017,33 @@ window.Simili = function Simili() {
     leftLabel: "Cell Hints Off",
     rightLabel: "Cell Hints On"
   })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16,
+      opacity: 0.5
+    }
+  }, "\uD83D\uDD07"), /*#__PURE__*/React.createElement("input", {
+    type: "range",
+    min: "0",
+    max: "100",
+    value: Math.round(musicVolume * 100),
+    onChange: e => setMusicVolume(parseInt(e.target.value) / 100),
+    style: {
+      flex: 1,
+      cursor: 'pointer'
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 16,
+      opacity: 0.5
+    }
+  }, "\uD83D\uDD0A")), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       fontWeight: 'bold',
