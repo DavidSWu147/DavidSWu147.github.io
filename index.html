@@ -2014,6 +2014,304 @@ function formatBookedNotation(bookings) {
   }
   return result.trim() || '—';
 }
+
+// --- Stats Encoding/Decoding ---
+// Packs all statistics into a base-36 string for URL persistence.
+// Format: version byte + varint-encoded values
+
+function encodeVarInt(bytes, val) {
+  val = Math.max(0, Math.round(val));
+  while (val >= 128) {
+    bytes.push(val & 0x7F | 0x80);
+    val >>>= 7;
+  }
+  bytes.push(val & 0x7F);
+}
+function decodeVarInt(bytes, pos) {
+  let val = 0,
+    shift = 0;
+  while (pos.i < bytes.length) {
+    const b = bytes[pos.i++];
+    val |= (b & 0x7F) << shift;
+    if ((b & 0x80) === 0) break;
+    shift += 7;
+  }
+  return val;
+}
+function serializePlayerStats(bytes, p) {
+  const vals = [p.highScore, p.gamesStarted, p.gamesFinished, p.gamesWon, Math.round(p.r10AdjustedWins * 100),
+  // store as hundredths
+  p.r10GuaranteedWins, p.pointsScored, p.matchPointsScored, p.scored100, p.scored105, p.scored110, p.scored115, p.scored120, p.scored125plus, p.seqBonusI, p.seqBonusIIA, p.seqBonusIIB, p.seqBonusIII, p.modernBonusIII, p.choseSequence, p.choseMatching, p.choseLadder, p.seq3, p.seq4, p.match3, p.match4, p.ladders, p.incompleteSeqRows, p.incompleteMatchRows, p.incompleteLadderRows, p.digitsInIncomplete, p.digitsInBank, p.gamesOutscored, p.gamesTied];
+  for (const v of vals) encodeVarInt(bytes, v);
+}
+function deserializePlayerStats(bytes, pos) {
+  const d = () => decodeVarInt(bytes, pos);
+  return {
+    highScore: d(),
+    gamesStarted: d(),
+    gamesFinished: d(),
+    gamesWon: d(),
+    r10AdjustedWins: d() / 100,
+    r10GuaranteedWins: d(),
+    pointsScored: d(),
+    matchPointsScored: d(),
+    scored100: d(),
+    scored105: d(),
+    scored110: d(),
+    scored115: d(),
+    scored120: d(),
+    scored125plus: d(),
+    seqBonusI: d(),
+    seqBonusIIA: d(),
+    seqBonusIIB: d(),
+    seqBonusIII: d(),
+    modernBonusIII: d(),
+    choseSequence: d(),
+    choseMatching: d(),
+    choseLadder: d(),
+    seq3: d(),
+    seq4: d(),
+    match3: d(),
+    match4: d(),
+    ladders: d(),
+    incompleteSeqRows: d(),
+    incompleteMatchRows: d(),
+    incompleteLadderRows: d(),
+    digitsInIncomplete: d(),
+    digitsInBank: d(),
+    gamesOutscored: d(),
+    gamesTied: d()
+  };
+}
+function serializeMatchStats(bytes, m) {
+  for (const v of [m.matchesStarted, m.matchesFinished, m.matchesWon, m.suddenDeathMatches, m.suddenDeathGames, m.matchesDrawn]) encodeVarInt(bytes, v);
+}
+function deserializeMatchStats(bytes, pos) {
+  const d = () => decodeVarInt(bytes, pos);
+  return {
+    matchesStarted: d(),
+    matchesFinished: d(),
+    matchesWon: d(),
+    suddenDeathMatches: d(),
+    suddenDeathGames: d(),
+    matchesDrawn: d()
+  };
+}
+function encodeStats(rollStats, gameStats, quadStats) {
+  const bytes = [1]; // version 1
+
+  // Roll stats
+  encodeVarInt(bytes, rollStats.games);
+  encodeVarInt(bytes, rollStats.rolls);
+  encodeVarInt(bytes, rollStats.triples);
+  encodeVarInt(bytes, rollStats.doubles);
+  encodeVarInt(bytes, rollStats.stepDoubles);
+  encodeVarInt(bytes, rollStats.solidRuns);
+  encodeVarInt(bytes, rollStats.brokenRuns);
+  for (let i = 0; i < 10; i++) encodeVarInt(bytes, rollStats.digitCounts[i]);
+
+  // Game stats in fixed order
+  const pageOrder = ['1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic', '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'];
+  for (const key of pageOrder) {
+    const page = gameStats[key];
+    const is2p = key.startsWith('2p');
+    const isMatch = key.includes('match');
+    serializePlayerStats(bytes, page.p1);
+    if (is2p) serializePlayerStats(bytes, page.p2);
+    if (isMatch) serializeMatchStats(bytes, page.match);
+    if (is2p && isMatch) serializeMatchStats(bytes, page.matchP2);
+  }
+
+  // Quad stats
+  for (const key of pageOrder) {
+    const qs = quadStats[key];
+    encodeVarInt(bytes, qs.qbOn);
+    encodeVarInt(bytes, qs.qbGetP1);
+    encodeVarInt(bytes, qs.qbGetP2);
+  }
+
+  // Convert bytes to base-36 via BigInt
+  let bigVal = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) bigVal = bigVal * 256n + BigInt(bytes[i]);
+  return bigVal.toString(36).toUpperCase();
+}
+function decodeStats(str) {
+  try {
+    let bigVal = BigInt('0');
+    const base = BigInt(36);
+    for (const ch of str.toLowerCase()) {
+      const d = parseInt(ch, 36);
+      if (isNaN(d)) return null;
+      bigVal = bigVal * base + BigInt(d);
+    }
+    const bytes = [];
+    while (bigVal > 0n) {
+      bytes.push(Number(bigVal & 0xFFn));
+      bigVal >>= 8n;
+    }
+    if (bytes.length === 0 || bytes[0] !== 1) return null; // version check
+
+    const pos = {
+      i: 1
+    };
+    const d = () => decodeVarInt(bytes, pos);
+    const rollStats = {
+      games: d(),
+      rolls: d(),
+      triples: d(),
+      doubles: d(),
+      stepDoubles: d(),
+      solidRuns: d(),
+      brokenRuns: d(),
+      digitCounts: Array.from({
+        length: 10
+      }, () => d())
+    };
+    const pageOrder = ['1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic', '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'];
+    const gameStats = {};
+    for (const key of pageOrder) {
+      const is2p = key.startsWith('2p');
+      const isMatch = key.includes('match');
+      const page = {
+        p1: deserializePlayerStats(bytes, pos)
+      };
+      if (is2p) page.p2 = deserializePlayerStats(bytes, pos);
+      if (isMatch) page.match = deserializeMatchStats(bytes, pos);
+      if (is2p && isMatch) page.matchP2 = deserializeMatchStats(bytes, pos);
+      gameStats[key] = page;
+    }
+    const quadStats = {};
+    for (const key of pageOrder) {
+      quadStats[key] = {
+        qbOn: d(),
+        qbGetP1: d(),
+        qbGetP2: d()
+      };
+    }
+    return {
+      rollStats,
+      gameStats,
+      quadStats
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// --- Player Game Statistics ---
+function computePlayerGameStats(grids, bankUsed, roundHistory, classicMode, laxPlacement, won, score, r10WinChance, playerIdx) {
+  // Score without quad bonus: score from totalScore + bonusIII
+  const baseScore = totalScore(grids, laxPlacement);
+  const seqBonusIII = classicMode ? hasSequenceBonusIII(grids) : false;
+  const modernBIII = !classicMode ? hasModernBonusIII(grids, laxPlacement) : false;
+  const bonusIIIVal = seqBonusIII || modernBIII ? 5 : 0;
+  const scoreNoQuad = baseScore + bonusIIIVal;
+
+  // Match points (no quad bonus): score if won, 0 if lost
+  const matchPoints = scoreNoQuad >= 100 ? scoreNoQuad : 0;
+
+  // Score bracket (without quad bonus)
+  const s = scoreNoQuad;
+  const scored100 = s >= 100 && s < 105 ? 1 : 0;
+  const scored105 = s >= 105 && s < 110 ? 1 : 0;
+  const scored110 = s >= 110 && s < 115 ? 1 : 0;
+  const scored115 = s >= 115 && s < 120 ? 1 : 0;
+  const scored120 = s >= 120 && s < 125 ? 1 : 0;
+  const scored125plus = s >= 125 ? 1 : 0;
+
+  // Bonus unlocks (check from grid state)
+  const seqBI = hasSequenceBonusI(grids) ? 1 : 0;
+  const seqBIIA = hasSequenceBonusIIA(grids) ? 1 : 0;
+  const seqBIIB = hasSequenceBonusIIB(grids) ? 1 : 0;
+  const seqBIII = seqBonusIII ? 1 : 0;
+  const modBIII = modernBIII && !seqBonusIII ? 1 : 0;
+
+  // Category choices per round
+  let choseSeq = 0,
+    choseMatch = 0,
+    choseLadder = 0;
+  for (const rh of roundHistory) {
+    const cat = rh.categories?.[playerIdx];
+    if (cat === 'sequence') choseSeq++;else if (cat === 'matching') choseMatch++;else if (cat === 'ladder') choseLadder++;
+  }
+
+  // Grid scoring details
+  let seq3 = 0,
+    seq4 = 0,
+    match3 = 0,
+    match4 = 0,
+    laddersScored = 0;
+  let incSeqRows = 0,
+    incMatchRows = 0,
+    incLadderRows = 0,
+    digitsInInc = 0;
+  for (const row of grids.sequence) {
+    const filled = row.filter(c => c !== null).length;
+    if (filled === 0) continue;
+    const s = scoreSequenceRow(row);
+    if (s >= 15) seq4++;else if (s >= 10) seq3++;else {
+      incSeqRows++;
+      digitsInInc += filled;
+    }
+  }
+  for (const row of grids.matching) {
+    const filled = row.filter(c => c !== null).length;
+    if (filled === 0) continue;
+    const s = scoreMatchingRow(row, laxPlacement);
+    if (s >= 20) match4++;else if (s >= 15) match3++;else {
+      incMatchRows++;
+      digitsInInc += filled;
+    }
+  }
+  for (const row of grids.ladder) {
+    const filled = row.filter(c => c !== null).length;
+    if (filled === 0) continue;
+    const s = scoreLadderRow(row, laxPlacement);
+    if (s >= 20) laddersScored++;else {
+      incLadderRows++;
+      digitsInInc += filled;
+    }
+  }
+
+  // Digits left in bank
+  const digitsInBank = bankUsed.filter(u => !u).length;
+
+  // R10 adjusted win (win chance for chosen category)
+  const r10Adj = r10WinChance || 0;
+  const r10Guar = r10Adj >= 100 ? 1 : 0;
+  return {
+    scoreNoQuad,
+    matchPoints,
+    won: scoreNoQuad >= 100,
+    scored100,
+    scored105,
+    scored110,
+    scored115,
+    scored120,
+    scored125plus,
+    seqBI,
+    seqBIIA,
+    seqBIIB,
+    seqBIII,
+    modBIII,
+    choseSeq,
+    choseMatch,
+    choseLadder,
+    seq3,
+    seq4,
+    match3,
+    match4,
+    ladders: laddersScored,
+    incSeqRows,
+    incMatchRows,
+    incLadderRows,
+    digitsInInc,
+    digitsInBank,
+    r10Adj: r10Adj / 100,
+    // convert percentage to fraction for summing
+    r10Guar
+  };
+}
 window.Simili = function Simili() {
   const [showSettings, setShowSettings] = useState(false);
   const [showGameLogs, setShowGameLogs] = useState(false);
@@ -2051,6 +2349,24 @@ window.Simili = function Simili() {
       allSeedsRef.current = [null, null, null, null];
     }
   }
+
+  // Load stats from URL param (once)
+  const statsLoadedRef = useRef(false);
+  if (!statsLoadedRef.current) {
+    statsLoadedRef.current = true;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const statsStr = params.get('stats');
+      if (statsStr) {
+        const decoded = decodeStats(statsStr);
+        if (decoded) {
+          setRollStats(decoded.rollStats);
+          setGameStats(decoded.gameStats);
+          setQuadStats(decoded.quadStats);
+        }
+      }
+    } catch (e) {/* ignore bad stats param */}
+  }
   const gameNumberRef = useRef(-1); // tracks total games started (incremented before each game start)
 
   // Match Play state
@@ -2071,6 +2387,104 @@ window.Simili = function Simili() {
   const [bank, setBank] = useState([]);
   const [roundHistory, setRoundHistory] = useState([]);
   const [gameLogs, setGameLogs] = useState([]);
+  const [rollStats, setRollStats] = useState({
+    games: 0,
+    rolls: 0,
+    triples: 0,
+    doubles: 0,
+    stepDoubles: 0,
+    solidRuns: 0,
+    brokenRuns: 0,
+    digitCounts: Array(10).fill(0)
+  });
+
+  // Per-page game statistics. Keys: '1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic',
+  //   '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'
+  const emptyPlayerStats = () => ({
+    highScore: 0,
+    gamesStarted: 0,
+    gamesFinished: 0,
+    gamesWon: 0,
+    r10AdjustedWins: 0,
+    r10GuaranteedWins: 0,
+    pointsScored: 0,
+    matchPointsScored: 0,
+    scored100: 0,
+    scored105: 0,
+    scored110: 0,
+    scored115: 0,
+    scored120: 0,
+    scored125plus: 0,
+    seqBonusI: 0,
+    seqBonusIIA: 0,
+    seqBonusIIB: 0,
+    seqBonusIII: 0,
+    modernBonusIII: 0,
+    choseSequence: 0,
+    choseMatching: 0,
+    choseLadder: 0,
+    seq3: 0,
+    seq4: 0,
+    match3: 0,
+    match4: 0,
+    ladders: 0,
+    incompleteSeqRows: 0,
+    incompleteMatchRows: 0,
+    incompleteLadderRows: 0,
+    digitsInIncomplete: 0,
+    digitsInBank: 0,
+    // 2P only:
+    gamesOutscored: 0,
+    gamesTied: 0
+  });
+  const emptyMatchStats = () => ({
+    matchesStarted: 0,
+    matchesFinished: 0,
+    matchesWon: 0,
+    suddenDeathMatches: 0,
+    suddenDeathGames: 0,
+    matchesDrawn: 0
+  });
+  const initPageStats = (is2p, isMatch) => {
+    const s = {
+      p1: emptyPlayerStats(),
+      ...(isMatch ? {
+        match: emptyMatchStats()
+      } : {})
+    };
+    if (is2p) s.p2 = emptyPlayerStats();
+    if (is2p && isMatch) {
+      s.matchP2 = emptyMatchStats();
+    } // matchesWon is per-player for 2p
+    return s;
+  };
+  const [gameStats, setGameStats] = useState({
+    '1p-single-modern': initPageStats(false, false),
+    '1p-single-classic': initPageStats(false, false),
+    '1p-match-modern': initPageStats(false, true),
+    '1p-match-classic': initPageStats(false, true),
+    '2p-single-modern': initPageStats(true, false),
+    '2p-single-classic': initPageStats(true, false),
+    '2p-match-modern': initPageStats(true, true),
+    '2p-match-classic': initPageStats(true, true)
+  });
+
+  // Quad Bonus stats: per page key, track games with QB on and QB achieved
+  const initQB = () => ({
+    qbOn: 0,
+    qbGetP1: 0,
+    qbGetP2: 0
+  });
+  const [quadStats, setQuadStats] = useState({
+    '1p-single-modern': initQB(),
+    '1p-single-classic': initQB(),
+    '1p-match-modern': initQB(),
+    '1p-match-classic': initQB(),
+    '2p-single-modern': initQB(),
+    '2p-single-classic': initQB(),
+    '2p-match-modern': initQB(),
+    '2p-match-classic': initQB()
+  });
 
   // Round 10 win chances (computed at start of round 10)
   const [round10WinChances, setRound10WinChances] = useState(null); // array per player: [{sequence:{winPct,outs}, matching:{...}, ladder:{...}}, ...]
@@ -2345,6 +2759,9 @@ window.Simili = function Simili() {
   // Save game log on gameover
   const gameLogSavedRef = useRef(false);
   const matchPhaseAtGameEndRef = useRef(matchPhase);
+  const matchStatsRecordedRef = useRef(false); // whether current match's start has been counted
+  const matchHadSuddenDeathRef = useRef(false);
+  const matchSuddenDeathGamesRef = useRef(0);
   useEffect(() => {
     if (phase === 'gameover' && !gameLogSavedRef.current) {
       gameLogSavedRef.current = true;
@@ -2387,9 +2804,272 @@ window.Simili = function Simili() {
       };
       if (!matchPlay) singleGameCounterRef.current++;
       setGameLogs(prev => [...prev, logEntry]);
+
+      // Update roll statistics for non-abandoned, non-seeded games
+      if (!abandoned && !isSeededGame) {
+        const p1Bank = players[0].bank || bank;
+        // Reconstruct rolls from bank (3 digits per round, 10 rounds)
+        const rolls = [];
+        for (let r = 0; r < 10; r++) {
+          const d0 = bank[r * 3]?.digit ?? 0;
+          const d1 = bank[r * 3 + 1]?.digit ?? 0;
+          const d2 = bank[r * 3 + 2]?.digit ?? 0;
+          rolls.push([d0, d1, d2]);
+        }
+        let triples = 0,
+          doubles = 0,
+          stepDoubles = 0,
+          solidRuns = 0,
+          brokenRuns = 0;
+        const dc = Array(10).fill(0);
+        for (const roll of rolls) {
+          dc[roll[0]]++;
+          dc[roll[1]]++;
+          dc[roll[2]]++;
+          const sorted = [...roll].sort((a, b) => a - b);
+          const [a, b, c] = sorted;
+          if (a === b && b === c) {
+            triples++;
+          } else if (a === b || b === c) {
+            // Double: check if step double (single is ±1 from the double's digit)
+            const dblDigit = a === b ? a : b;
+            const single = a === b ? c : a;
+            const diff = Math.min(Math.abs(single - dblDigit), 10 - Math.abs(single - dblDigit));
+            if (diff === 1) stepDoubles++;
+            doubles++;
+          } else {
+            // All distinct: check for solid run or broken run using mod-10 arithmetic
+            const [a, b, c] = sorted;
+            // Solid run: three consecutive mod 10 — check all orderings
+            let isSolid = false;
+            for (const [x, y, z] of [[a, b, c], [b, c, a], [c, a, b]]) {
+              if ((y - x + 10) % 10 === 1 && (z - y + 10) % 10 === 1) {
+                isSolid = true;
+                break;
+              }
+            }
+            if (isSolid) {
+              solidRuns++;
+            } else {
+              // Broken run: two consecutive mod 10, third is 2 away from either end
+              let isBroken = false;
+              for (const [x, y, z] of [[a, b, c], [b, c, a], [c, a, b]]) {
+                if ((y - x + 10) % 10 === 1) {
+                  // x,y consecutive; check if z is 2 below x or 2 above y
+                  if ((x - z + 10) % 10 === 2 || (z - y + 10) % 10 === 2) {
+                    isBroken = true;
+                    break;
+                  }
+                }
+              }
+              if (isBroken) brokenRuns++;
+            }
+          }
+        }
+        setRollStats(prev => ({
+          games: prev.games + 1,
+          rolls: prev.rolls + 10,
+          triples: prev.triples + triples,
+          doubles: prev.doubles + doubles,
+          stepDoubles: prev.stepDoubles + stepDoubles,
+          solidRuns: prev.solidRuns + solidRuns,
+          brokenRuns: prev.brokenRuns + brokenRuns,
+          digitCounts: prev.digitCounts.map((c, i) => c + dc[i])
+        }));
+      }
+
+      // Update game statistics (for non-seeded games)
+      if (!isSeededGame) {
+        const pageKey = `${twoPlayer ? '2p' : '1p'}-${matchPlay ? 'match' : 'single'}-${classicMode ? 'classic' : 'modern'}`;
+        const isFinished = !abandoned;
+
+        // Track sudden death games
+        if (matchPlay && matchPhaseAtGameEndRef.current === 'sudden-death') {
+          matchSuddenDeathGamesRef.current++;
+        }
+
+        // Track match start (once per match)
+        if (matchPlay && !matchStatsRecordedRef.current) {
+          matchStatsRecordedRef.current = true;
+          setGameStats(prev => {
+            const page = {
+              ...prev[pageKey]
+            };
+            if (page.match) page.match = {
+              ...page.match,
+              matchesStarted: page.match.matchesStarted + 1
+            };
+            if (page.matchP2) page.matchP2 = {
+              ...page.matchP2,
+              matchesStarted: page.matchP2.matchesStarted + 1
+            };
+            return {
+              ...prev,
+              [pageKey]: page
+            };
+          });
+        }
+
+        // Compute per-player stats
+        const playerStats = players.map((p, idx) => {
+          if (!isFinished) return null;
+          const chosenCat = roundHistory[roundHistory.length - 1]?.categories?.[idx];
+          const r10Chances = round10WinChances?.[idx];
+          const r10WinPct = r10Chances && chosenCat ? r10Chances[chosenCat]?.winPct : null;
+          return computePlayerGameStats(p.grids, p.bankUsed, roundHistory, classicMode, laxPlacement, getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus) >= 100, getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus), r10WinPct, idx);
+        });
+
+        // 2P: compute outscored/tied (match points: won=score, lost=0)
+        let p1Outscored = 0,
+          p1Tied = 0,
+          p2Outscored = 0;
+        if (twoPlayer && isFinished) {
+          const mp1 = playerStats[0].matchPoints;
+          const mp2 = playerStats[1].matchPoints;
+          if (mp1 > mp2) p1Outscored = 1;else if (mp2 > mp1) p2Outscored = 1;else p1Tied = 1;
+        }
+        setGameStats(prev => {
+          const page = {
+            ...prev[pageKey]
+          };
+          const updatePlayer = (key, ps, outscored, tied) => {
+            const p = {
+              ...page[key]
+            };
+            p.gamesStarted++;
+            if (isFinished && ps) {
+              p.gamesFinished++;
+              if (ps.won) {
+                p.gamesWon++;
+                if (!matchPlay && ps.scoreNoQuad > p.highScore) p.highScore = ps.scoreNoQuad;
+              }
+              p.r10AdjustedWins += ps.r10Adj;
+              p.r10GuaranteedWins += ps.r10Guar;
+              p.pointsScored += ps.scoreNoQuad;
+              p.matchPointsScored += ps.matchPoints;
+              p.scored100 += ps.scored100;
+              p.scored105 += ps.scored105;
+              p.scored110 += ps.scored110;
+              p.scored115 += ps.scored115;
+              p.scored120 += ps.scored120;
+              p.scored125plus += ps.scored125plus;
+              p.seqBonusI += ps.seqBI;
+              p.seqBonusIIA += ps.seqBIIA;
+              p.seqBonusIIB += ps.seqBIIB;
+              p.seqBonusIII += ps.seqBIII;
+              p.modernBonusIII += ps.modBIII;
+              p.choseSequence += ps.choseSeq;
+              p.choseMatching += ps.choseMatch;
+              p.choseLadder += ps.choseLadder;
+              p.seq3 += ps.seq3;
+              p.seq4 += ps.seq4;
+              p.match3 += ps.match3;
+              p.match4 += ps.match4;
+              p.ladders += ps.ladders;
+              p.incompleteSeqRows += ps.incSeqRows;
+              p.incompleteMatchRows += ps.incMatchRows;
+              p.incompleteLadderRows += ps.incLadderRows;
+              p.digitsInIncomplete += ps.digitsInInc;
+              p.digitsInBank += ps.digitsInBank;
+              if (twoPlayer) {
+                p.gamesOutscored += outscored;
+                p.gamesTied += tied;
+              }
+            }
+            return p;
+          };
+          page.p1 = updatePlayer('p1', playerStats[0], p1Outscored, p1Tied);
+          if (twoPlayer) page.p2 = updatePlayer('p2', playerStats[1], p2Outscored, p1Tied);
+          return {
+            ...prev,
+            [pageKey]: page
+          };
+        });
+
+        // Update quad bonus stats (for finished games)
+        if (isFinished) {
+          setQuadStats(prev => {
+            const qs = {
+              ...prev[pageKey]
+            };
+            if (quadBonus) {
+              qs.qbOn++;
+              if (hasQuadBonus(players[0].grids, laxPlacement)) qs.qbGetP1++;
+              if (twoPlayer && hasQuadBonus(players[1].grids, laxPlacement)) qs.qbGetP2++;
+            }
+            return {
+              ...prev,
+              [pageKey]: qs
+            };
+          });
+        }
+      }
     }
     if (phase !== 'gameover') gameLogSavedRef.current = false;
   }, [phase]);
+
+  // --- Match End Stats ---
+  const prevMatchPhaseRef = useRef(matchPhase);
+  useEffect(() => {
+    if (matchPhase === 'done' && prevMatchPhaseRef.current !== 'done' && matchPlay && !isSeededGame) {
+      const pageKey = `${twoPlayer ? '2p' : '1p'}-match-${classicMode ? 'classic' : 'modern'}`;
+      const wasAbandoned = matchAbandoned;
+      const wasDrawn = !wasAbandoned && twoPlayer && (() => {
+        // A draw happens when the user clicks "Call it a Draw" — matchScores should show a tie
+        const result = computeMatchResult(matchScores);
+        return result?.tied;
+      })();
+      setGameStats(prev => {
+        const page = {
+          ...prev[pageKey]
+        };
+        const updateMatchStats = (mKey, pKey, isWinner) => {
+          if (!page[mKey]) return;
+          const m = {
+            ...page[mKey]
+          };
+          if (!wasAbandoned) {
+            m.matchesFinished++;
+            if (isWinner) m.matchesWon++;
+            if (wasDrawn) m.matchesDrawn++;
+            if (matchHadSuddenDeathRef.current) m.suddenDeathMatches++;
+            m.suddenDeathGames += matchSuddenDeathGamesRef.current;
+          }
+          page[mKey] = m;
+          // Update high score for match
+          if (!wasAbandoned && page[pKey]) {
+            const p = {
+              ...page[pKey]
+            };
+            const totalMatchPts = matchScores.reduce((s, g) => s + (g[pKey === 'p1' ? 'p1' : 'p2'] || 0), 0);
+            if (totalMatchPts > p.highScore) p.highScore = totalMatchPts;
+            page[pKey] = p;
+          }
+        };
+        if (twoPlayer) {
+          const result = computeMatchResult(matchScores);
+          updateMatchStats('match', 'p1', result && !result.tied && result.winner === 1);
+          updateMatchStats('matchP2', 'p2', result && !result.tied && result.winner === 2);
+        } else {
+          updateMatchStats('match', 'p1', true); // 1P always "wins" their match
+          // 1P match high score
+          if (!wasAbandoned && page.p1) {
+            const p = {
+              ...page.p1
+            };
+            const totalMatchPts = matchScores.reduce((s, g) => s + g.p1, 0);
+            if (totalMatchPts > p.highScore) p.highScore = totalMatchPts;
+            page.p1 = p;
+          }
+        }
+        return {
+          ...prev,
+          [pageKey]: page
+        };
+      });
+    }
+    prevMatchPhaseRef.current = matchPhase;
+  }, [matchPhase]);
 
   // --- Match Play Logic ---
   const handleMatchNextGame = () => {
@@ -2444,6 +3124,7 @@ window.Simili = function Simili() {
     resetGameState();
   };
   const handleSuddenDeath = () => {
+    matchHadSuddenDeathRef.current = true;
     setMatchPhase('sudden-death');
     resetGameState();
   };
@@ -2708,6 +3389,9 @@ window.Simili = function Simili() {
       const seed = seedIdx < 4 ? allSeedsRef.current[seedIdx] : null;
       setSeedRolls(seed);
       setIsSeededGame(!!seed);
+      matchStatsRecordedRef.current = false;
+      matchHadSuddenDeathRef.current = false;
+      matchSuddenDeathGamesRef.current = 0;
       setPhase('choose');
       setShowSettings(false);
       setShowGameLogs(false);
@@ -3143,6 +3827,7 @@ window.Simili = function Simili() {
         if (!prev) {
           setShowSettings(false);
           setShowGameLogs(false);
+          setStatsPageIndex(9);
         }
         return !prev;
       }),
@@ -3634,7 +4319,7 @@ window.Simili = function Simili() {
       }, formatBookedNotation(log.players[0].bookedPerRound[ri]))))))));
     }));
   })(), showStatistics && (() => {
-    const statsPages = ['1 Player, Single Game, Modern Version', '1 Player, Single Game, Classic Version', '1 Player, Match Play, Modern Version', '1 Player, Match Play, Classic Version', 'Quad Bonuses, 1 Player', '2 Players, Single Game, Modern Version', '2 Players, Single Game, Classic Version', '2 Players, Match Play, Modern Version', '2 Players, Match Play, Classic Version', 'Quad Bonuses, 2 Players'];
+    const statsPages = ['1 Player, Single Game, Modern Version', '1 Player, Single Game, Classic Version', '1 Player, Match Play, Modern Version', '1 Player, Match Play, Classic Version', '2 Players, Single Game, Modern Version', '2 Players, Single Game, Classic Version', '2 Players, Match Play, Modern Version', '2 Players, Match Play, Classic Version', 'Quad Bonus Statistics', 'Roll Statistics'];
     const totalStatsPages = statsPages.length;
     const si = statsPageIndex >= 0 && statsPageIndex < totalStatsPages ? statsPageIndex : 0;
     const goStatsPrev = () => setStatsPageIndex(si <= 0 ? totalStatsPages - 1 : si - 1);
@@ -3705,25 +4390,551 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 8
       }
-    }, statsPages[si]), /*#__PURE__*/React.createElement("table", {
-      style: {
-        borderCollapse: 'collapse',
-        width: '100%',
-        fontSize: 11,
-        fontFamily: "'Special Elite', 'Courier New', monospace"
+    }, statsPages[si]), statsPages[si] === 'Quad Bonus Statistics' ? (() => {
+      const keys = [['1p-single-modern', '1P Single Modern', false], ['1p-single-classic', '1P Single Classic', false], ['1p-match-modern', '1P Match Modern', false], ['1p-match-classic', '1P Match Classic', false], ['2p-single-modern', '2P Single Modern', true], ['2p-single-classic', '2P Single Classic', true], ['2p-match-modern', '2P Match Modern', true], ['2p-match-classic', '2P Match Classic', true]];
+      const thStyle = {
+        padding: '4px 6px',
+        borderBottom: '1.5px solid #999',
+        textAlign: 'right',
+        fontWeight: 'bold',
+        fontSize: 10
+      };
+      const tdStyle = {
+        padding: '3px 6px',
+        borderBottom: '1px solid #eee',
+        textAlign: 'right',
+        fontSize: 10
+      };
+      const tdLabelStyle = {
+        ...tdStyle,
+        textAlign: 'left',
+        fontWeight: 'bold'
+      };
+      const pctFmt = (val, denom) => {
+        if (denom <= 0) return '—';
+        const v = val / denom * 100;
+        return v === 100 ? '100.0%' : v.toFixed(2) + '%';
+      };
+      const rows = [];
+      for (const [key, label, is2p] of keys) {
+        const qs = quadStats[key];
+        const gs = gameStats[key];
+        const totalGames = gs.p1.gamesFinished;
+        // Odd row: QB On
+        rows.push({
+          label: `Quad Bonus On, ${label}`,
+          p1Total: qs.qbOn,
+          p1Pct: pctFmt(qs.qbOn, totalGames),
+          p2Total: is2p ? qs.qbOn : '—',
+          p2Pct: is2p ? pctFmt(qs.qbOn, totalGames) : '—'
+        });
+        // Even row: QB Get
+        rows.push({
+          label: `Quad Bonus Get, ${label}`,
+          p1Total: qs.qbGetP1,
+          p1Pct: pctFmt(qs.qbGetP1, qs.qbOn),
+          p2Total: is2p ? qs.qbGetP2 : '—',
+          p2Pct: is2p ? pctFmt(qs.qbGetP2, qs.qbOn) : '—'
+        });
       }
-    }, /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", {
-      style: {
-        borderBottom: '1px solid #ddd'
+      return /*#__PURE__*/React.createElement("table", {
+        style: {
+          borderCollapse: 'collapse',
+          width: '100%',
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          tableLayout: 'fixed'
+        }
+      }, /*#__PURE__*/React.createElement("colgroup", null, /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '36%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '16%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '16%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '16%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '16%'
+        }
+      })), /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+        style: {
+          ...thStyle,
+          textAlign: 'left'
+        }
+      }), /*#__PURE__*/React.createElement("th", {
+        style: thStyle
+      }, "P1 Total"), /*#__PURE__*/React.createElement("th", {
+        style: thStyle
+      }, "P1 %"), /*#__PURE__*/React.createElement("th", {
+        style: thStyle
+      }, "P2 Total"), /*#__PURE__*/React.createElement("th", {
+        style: thStyle
+      }, "P2 %"))), /*#__PURE__*/React.createElement("tbody", null, rows.map((r, i) => /*#__PURE__*/React.createElement("tr", {
+        key: i
+      }, /*#__PURE__*/React.createElement("td", {
+        style: tdLabelStyle
+      }, r.label), /*#__PURE__*/React.createElement("td", {
+        style: tdStyle
+      }, r.p1Total), /*#__PURE__*/React.createElement("td", {
+        style: tdStyle
+      }, r.p1Pct), /*#__PURE__*/React.createElement("td", {
+        style: tdStyle
+      }, r.p2Total), /*#__PURE__*/React.createElement("td", {
+        style: tdStyle
+      }, r.p2Pct)))));
+    })() : statsPages[si] === 'Roll Statistics' ? (() => {
+      const statsHash = encodeStats(rollStats, gameStats, quadStats);
+      const g = rollStats.games;
+      const perGame = total => g > 0 ? (total / g).toFixed(2) : '—';
+      const digitNames = ['Zeros', 'Ones', 'Twos', 'Threes', 'Fours', 'Fives', 'Sixes', 'Sevens', 'Eights', 'Nines'];
+      const rows = [['Rolls', rollStats.rolls, g > 0 ? '10.0' : '—'], ['Triples (000~999)', rollStats.triples, perGame(rollStats.triples)], ['Doubles (00~99)', rollStats.doubles, perGame(rollStats.doubles)], ['Step Doubles (001~998)', rollStats.stepDoubles, perGame(rollStats.stepDoubles)], ['Solid Runs (012~987)', rollStats.solidRuns, perGame(rollStats.solidRuns)], ['Broken Runs (013~986)', rollStats.brokenRuns, perGame(rollStats.brokenRuns)], ...digitNames.map((name, i) => [name, rollStats.digitCounts[i], perGame(rollStats.digitCounts[i])])];
+      const thStyle = {
+        padding: '4px 6px',
+        borderBottom: '1.5px solid #999',
+        textAlign: 'right',
+        fontWeight: 'bold'
+      };
+      const tdStyle = {
+        padding: '4px 6px',
+        borderBottom: '1px solid #eee',
+        textAlign: 'right'
+      };
+      const tdLabelStyle = {
+        ...tdStyle,
+        textAlign: 'left',
+        fontWeight: 'bold'
+      };
+      return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginBottom: 10,
+          padding: '8px 10px',
+          background: '#f0ebe0',
+          border: '1px dashed #ccc',
+          borderRadius: 4,
+          fontSize: 10,
+          wordBreak: 'break-all',
+          fontFamily: "'Special Elite', 'Courier New', monospace"
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontWeight: 'bold',
+          marginBottom: 4
+        }
+      }, "Paste this string after the URL to save your stats:"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          userSelect: 'all',
+          cursor: 'text'
+        }
+      }, "/?stats=", statsHash)), /*#__PURE__*/React.createElement("table", {
+        style: {
+          borderCollapse: 'collapse',
+          width: '100%',
+          fontSize: 11,
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          tableLayout: 'fixed'
+        }
+      }, /*#__PURE__*/React.createElement("colgroup", null, /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '40%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '30%'
+        }
+      }), /*#__PURE__*/React.createElement("col", {
+        style: {
+          width: '30%'
+        }
+      })), /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+        style: {
+          ...thStyle,
+          textAlign: 'left'
+        }
+      }), /*#__PURE__*/React.createElement("th", {
+        style: thStyle
+      }, "Total"), /*#__PURE__*/React.createElement("th", {
+        style: thStyle
+      }, "Per Game"))), /*#__PURE__*/React.createElement("tbody", null, rows.map(([label, total, pg], i) => /*#__PURE__*/React.createElement("tr", {
+        key: i
+      }, /*#__PURE__*/React.createElement("td", {
+        style: tdLabelStyle
+      }, label.includes('(') ? /*#__PURE__*/React.createElement(React.Fragment, null, label.split('(')[0].trim(), " ", /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontWeight: 'normal'
+        }
+      }, "(", label.split('(')[1])) : label), /*#__PURE__*/React.createElement("td", {
+        style: tdStyle
+      }, total), /*#__PURE__*/React.createElement("td", {
+        style: tdStyle
+      }, pg))))));
+    })() : (() => {
+      // Map page title to data key
+      const pageMap = {
+        '1 Player, Single Game, Modern Version': '1p-single-modern',
+        '1 Player, Single Game, Classic Version': '1p-single-classic',
+        '1 Player, Match Play, Modern Version': '1p-match-modern',
+        '1 Player, Match Play, Classic Version': '1p-match-classic',
+        '2 Players, Single Game, Modern Version': '2p-single-modern',
+        '2 Players, Single Game, Classic Version': '2p-single-classic',
+        '2 Players, Match Play, Modern Version': '2p-match-modern',
+        '2 Players, Match Play, Classic Version': '2p-match-classic'
+      };
+      const pageKey = pageMap[statsPages[si]];
+      if (!pageKey) return /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 11,
+          opacity: 0.4,
+          fontStyle: 'italic',
+          padding: 4
+        }
+      }, "No data yet.");
+      const page = gameStats[pageKey];
+      const is2p = pageKey.startsWith('2p');
+      const isMatch = pageKey.includes('match');
+      const isClassic = pageKey.includes('classic');
+      const pct = (val, denom) => {
+        if (denom <= 0) return '—';
+        const v = val / denom * 100;
+        return v === 100 ? '100.0%' : v.toFixed(2) + '%';
+      };
+      const div = (val, denom) => denom > 0 ? (val / denom).toFixed(2) : '—';
+      const buildRows = (p, pLabel) => {
+        const N = p.gamesStarted;
+        const M = p.gamesFinished;
+        const rows = [];
+        rows.push({
+          label: 'HIGH SCORE',
+          total: p.highScore,
+          pg: '—',
+          isSeparator: false
+        });
+        if (isMatch && page.match) {
+          const m = pLabel === 'p2' && page.matchP2 ? page.matchP2 : page.match;
+          rows.push({
+            label: 'Matches Started',
+            total: m.matchesStarted,
+            pg: '—'
+          });
+          rows.push({
+            label: 'Matches Finished',
+            total: m.matchesFinished,
+            pg: '—'
+          });
+          if (is2p) {
+            rows.push({
+              label: 'Matches Won',
+              total: m.matchesWon,
+              pg: '—'
+            });
+            rows.push({
+              label: 'Sudden Death Matches',
+              total: m.suddenDeathMatches,
+              pg: '—'
+            });
+            rows.push({
+              label: 'Sudden Death Games Played',
+              total: m.suddenDeathGames,
+              pg: '—'
+            });
+            rows.push({
+              label: 'Matches Drawn',
+              total: m.matchesDrawn,
+              pg: '—'
+            });
+          }
+        }
+        rows.push({
+          label: 'Games Started',
+          total: N,
+          pg: N > 0 ? '100.0%' : '—'
+        });
+        rows.push({
+          label: 'Games Finished',
+          total: M,
+          pg: pct(M, N)
+        });
+        rows.push({
+          label: 'Games Won',
+          total: p.gamesWon,
+          pg: pct(p.gamesWon, N)
+        });
+        rows.push({
+          label: 'Round 10 Adjusted Wins',
+          total: p.r10AdjustedWins > 0 ? p.r10AdjustedWins.toFixed(2) : '0',
+          pg: pct(p.r10AdjustedWins, N)
+        });
+        rows.push({
+          label: 'Round 10 Guaranteed Wins',
+          total: p.r10GuaranteedWins,
+          pg: pct(p.r10GuaranteedWins, N)
+        });
+        if (is2p) {
+          rows.push({
+            label: 'Games Outscored',
+            total: p.gamesOutscored,
+            pg: pct(p.gamesOutscored, M)
+          });
+          rows.push({
+            label: 'Games Tied',
+            total: p.gamesTied,
+            pg: pct(p.gamesTied, M)
+          });
+        }
+        rows.push({
+          label: 'Points Scored',
+          total: p.pointsScored,
+          pg: div(p.pointsScored, M)
+        });
+        rows.push({
+          label: 'Match Points Scored',
+          total: p.matchPointsScored,
+          pg: div(p.matchPointsScored, M)
+        });
+        rows.push({
+          label: 'Games Scored 100',
+          total: p.scored100,
+          pg: pct(p.scored100, M)
+        });
+        rows.push({
+          label: 'Games Scored 105',
+          total: p.scored105,
+          pg: pct(p.scored105, M)
+        });
+        rows.push({
+          label: 'Games Scored 110',
+          total: p.scored110,
+          pg: pct(p.scored110, M)
+        });
+        rows.push({
+          label: 'Games Scored 115',
+          total: p.scored115,
+          pg: pct(p.scored115, M)
+        });
+        rows.push({
+          label: 'Games Scored 120',
+          total: p.scored120,
+          pg: pct(p.scored120, M)
+        });
+        rows.push({
+          label: 'Games Scored 125+',
+          total: p.scored125plus,
+          pg: pct(p.scored125plus, M)
+        });
+        rows.push({
+          label: 'Sequence Bonus I Unlocks',
+          total: p.seqBonusI,
+          pg: pct(p.seqBonusI, M)
+        });
+        rows.push({
+          label: isClassic ? 'Sequence Bonus II Unlocks' : 'Sequence Bonus II-A Unlocks',
+          total: p.seqBonusIIA,
+          pg: pct(p.seqBonusIIA, M)
+        });
+        if (!isClassic) rows.push({
+          label: 'Sequence Bonus II-B Unlocks',
+          total: p.seqBonusIIB,
+          pg: pct(p.seqBonusIIB, M)
+        });
+        rows.push({
+          label: 'Sequence Bonus III Unlocks',
+          total: p.seqBonusIII,
+          pg: pct(p.seqBonusIII, M)
+        });
+        if (!isClassic) rows.push({
+          label: 'Modern Bonus III Unlocks',
+          total: p.modernBonusIII,
+          pg: pct(p.modernBonusIII, M)
+        });
+        rows.push({
+          label: 'Rounds Chose Sequence',
+          total: p.choseSequence,
+          pg: div(p.choseSequence, M)
+        });
+        rows.push({
+          label: 'Rounds Chose Matching',
+          total: p.choseMatching,
+          pg: div(p.choseMatching, M)
+        });
+        rows.push({
+          label: 'Rounds Chose Ladder',
+          total: p.choseLadder,
+          pg: div(p.choseLadder, M)
+        });
+        rows.push({
+          label: '3-Sequences Scored',
+          total: p.seq3,
+          pg: div(p.seq3, M)
+        });
+        rows.push({
+          label: '4-Sequences Scored',
+          total: p.seq4,
+          pg: div(p.seq4, M)
+        });
+        rows.push({
+          label: '3-Matchings Scored',
+          total: p.match3,
+          pg: div(p.match3, M)
+        });
+        rows.push({
+          label: '4-Matchings Scored',
+          total: p.match4,
+          pg: div(p.match4, M)
+        });
+        rows.push({
+          label: 'Ladders Scored',
+          total: p.ladders,
+          pg: div(p.ladders, M)
+        });
+        rows.push({
+          label: 'Incomplete Sequence Rows',
+          total: p.incompleteSeqRows,
+          pg: div(p.incompleteSeqRows, M)
+        });
+        rows.push({
+          label: 'Incomplete Matching Rows',
+          total: p.incompleteMatchRows,
+          pg: div(p.incompleteMatchRows, M)
+        });
+        rows.push({
+          label: 'Incomplete Ladder Rows',
+          total: p.incompleteLadderRows,
+          pg: div(p.incompleteLadderRows, M)
+        });
+        rows.push({
+          label: 'Digits in Incomplete Rows',
+          total: p.digitsInIncomplete,
+          pg: div(p.digitsInIncomplete, M)
+        });
+        rows.push({
+          label: 'Digits Left in Bank',
+          total: p.digitsInBank,
+          pg: div(p.digitsInBank, M)
+        });
+        return rows;
+      };
+      const thStyle = {
+        padding: '4px 6px',
+        borderBottom: '1.5px solid #999',
+        textAlign: 'right',
+        fontWeight: 'bold',
+        fontSize: 10
+      };
+      const tdStyle = {
+        padding: '3px 6px',
+        borderBottom: '1px solid #eee',
+        textAlign: 'right',
+        fontSize: 10
+      };
+      const tdLabelStyle = {
+        ...tdStyle,
+        textAlign: 'left',
+        fontWeight: 'bold'
+      };
+      if (!is2p) {
+        const rows = buildRows(page.p1, 'p1');
+        return /*#__PURE__*/React.createElement("table", {
+          style: {
+            borderCollapse: 'collapse',
+            width: '100%',
+            fontFamily: "'Special Elite', 'Courier New', monospace",
+            tableLayout: 'fixed'
+          }
+        }, /*#__PURE__*/React.createElement("colgroup", null, /*#__PURE__*/React.createElement("col", {
+          style: {
+            width: '50%'
+          }
+        }), /*#__PURE__*/React.createElement("col", {
+          style: {
+            width: '25%'
+          }
+        }), /*#__PURE__*/React.createElement("col", {
+          style: {
+            width: '25%'
+          }
+        })), /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+          style: {
+            ...thStyle,
+            textAlign: 'left'
+          }
+        }), /*#__PURE__*/React.createElement("th", {
+          style: thStyle
+        }, "Total"), /*#__PURE__*/React.createElement("th", {
+          style: thStyle
+        }, "Per Game"))), /*#__PURE__*/React.createElement("tbody", null, rows.map((r, i) => /*#__PURE__*/React.createElement("tr", {
+          key: i
+        }, /*#__PURE__*/React.createElement("td", {
+          style: tdLabelStyle
+        }, r.label), /*#__PURE__*/React.createElement("td", {
+          style: tdStyle
+        }, r.total), /*#__PURE__*/React.createElement("td", {
+          style: tdStyle
+        }, r.pg)))));
+      } else {
+        const rows1 = buildRows(page.p1, 'p1');
+        const rows2 = buildRows(page.p2, 'p2');
+        return /*#__PURE__*/React.createElement("table", {
+          style: {
+            borderCollapse: 'collapse',
+            width: '100%',
+            fontFamily: "'Special Elite', 'Courier New', monospace",
+            tableLayout: 'fixed'
+          }
+        }, /*#__PURE__*/React.createElement("colgroup", null, /*#__PURE__*/React.createElement("col", {
+          style: {
+            width: '28%'
+          }
+        }), /*#__PURE__*/React.createElement("col", {
+          style: {
+            width: '18%'
+          }
+        }), /*#__PURE__*/React.createElement("col", {
+          style: {
+            width: '18%'
+          }
+        }), /*#__PURE__*/React.createElement("col", {
+          style: {
+            width: '18%'
+          }
+        }), /*#__PURE__*/React.createElement("col", {
+          style: {
+            width: '18%'
+          }
+        })), /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+          style: {
+            ...thStyle,
+            textAlign: 'left'
+          }
+        }), /*#__PURE__*/React.createElement("th", {
+          style: thStyle
+        }, "P1 Total"), /*#__PURE__*/React.createElement("th", {
+          style: thStyle
+        }, "P1 /Game"), /*#__PURE__*/React.createElement("th", {
+          style: thStyle
+        }, "P2 Total"), /*#__PURE__*/React.createElement("th", {
+          style: thStyle
+        }, "P2 /Game"))), /*#__PURE__*/React.createElement("tbody", null, rows1.map((r, i) => /*#__PURE__*/React.createElement("tr", {
+          key: i
+        }, /*#__PURE__*/React.createElement("td", {
+          style: tdLabelStyle
+        }, r.label), /*#__PURE__*/React.createElement("td", {
+          style: tdStyle
+        }, r.total), /*#__PURE__*/React.createElement("td", {
+          style: tdStyle
+        }, r.pg), /*#__PURE__*/React.createElement("td", {
+          style: tdStyle
+        }, rows2[i]?.total), /*#__PURE__*/React.createElement("td", {
+          style: tdStyle
+        }, rows2[i]?.pg)))));
       }
-    }, /*#__PURE__*/React.createElement("td", {
-      style: {
-        padding: '4px',
-        opacity: 0.4,
-        fontStyle: 'italic'
-      },
-      colSpan: 2
-    }, "No data yet.")))));
+    })());
   })())));
 };
 
