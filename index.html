@@ -2350,10 +2350,8 @@ window.Simili = function Simili() {
     }
   }
 
-  // Load stats from URL param (once)
-  const statsLoadedRef = useRef(false);
-  if (!statsLoadedRef.current) {
-    statsLoadedRef.current = true;
+  // Load stats from URL param (once on mount)
+  useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const statsStr = params.get('stats');
@@ -2366,7 +2364,7 @@ window.Simili = function Simili() {
         }
       }
     } catch (e) {/* ignore bad stats param */}
-  }
+  }, []);
   const gameNumberRef = useRef(-1); // tracks total games started (incremented before each game start)
 
   // Match Play state
