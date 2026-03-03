@@ -2039,8 +2039,8 @@ function decodeVarInt(bytes, pos) {
   return val;
 }
 function serializePlayerStats(bytes, p) {
-  const vals = [p.highScore, p.gamesStarted, p.gamesFinished, p.gamesWon, Math.round(p.r10AdjustedWins * 100),
-  // store as hundredths
+  const vals = [p.highScore, p.gamesStarted, p.gamesFinished, p.gamesWon, Math.round(p.r10AdjustedWins * 1000),
+  // store as thousandths
   p.r10GuaranteedWins, p.pointsScored, p.matchPointsScored, p.scored100, p.scored105, p.scored110, p.scored115, p.scored120, p.scored125, p.scored130, p.scored135, p.scored140, p.scored145, p.scored150, p.seqBonusI, p.seqBonusIIA, p.seqBonusIIB, p.seqBonusIII, p.modernBonusIIIM, p.modernBonusIIIL, p.choseSequence, p.choseMatching, p.choseLadder, p.seq3, p.seq4, p.match3, p.match4, p.ladders, p.incompleteSeqRows, p.incompleteMatchRows, p.incompleteLadderRows, p.digitsInIncomplete, p.digitsInBank, p.gamesOutscored, p.gamesTied];
   for (const v of vals) encodeVarInt(bytes, v);
   for (let i = 0; i < 30; i++) encodeVarInt(bytes, (p.roundCats || [])[i] || 0);
@@ -2052,7 +2052,7 @@ function deserializePlayerStats(bytes, pos) {
     gamesStarted: d(),
     gamesFinished: d(),
     gamesWon: d(),
-    r10AdjustedWins: d() / 100,
+    r10AdjustedWins: d() / 1000,
     r10GuaranteedWins: d(),
     pointsScored: d(),
     matchPointsScored: d(),
@@ -4849,7 +4849,7 @@ window.Simili = function Simili() {
         });
         rows.push({
           label: 'Round 10 Adjusted Wins',
-          total: p.r10AdjustedWins > 0 ? p.r10AdjustedWins.toFixed(2) : '0',
+          total: p.r10AdjustedWins > 0 ? p.r10AdjustedWins.toFixed(3) : '0',
           pg: pct(p.r10AdjustedWins, N)
         });
         rows.push({
