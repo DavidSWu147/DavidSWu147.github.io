@@ -2041,8 +2041,9 @@ function decodeVarInt(bytes, pos) {
 function serializePlayerStats(bytes, p) {
   const vals = [p.highScore, p.gamesStarted, p.gamesFinished, p.gamesWon, Math.round(p.r10AdjustedWins * 100),
   // store as hundredths
-  p.r10GuaranteedWins, p.pointsScored, p.matchPointsScored, p.scored100, p.scored105, p.scored110, p.scored115, p.scored120, p.scored125plus, p.seqBonusI, p.seqBonusIIA, p.seqBonusIIB, p.seqBonusIII, p.modernBonusIII, p.choseSequence, p.choseMatching, p.choseLadder, p.seq3, p.seq4, p.match3, p.match4, p.ladders, p.incompleteSeqRows, p.incompleteMatchRows, p.incompleteLadderRows, p.digitsInIncomplete, p.digitsInBank, p.gamesOutscored, p.gamesTied];
+  p.r10GuaranteedWins, p.pointsScored, p.matchPointsScored, p.scored100, p.scored105, p.scored110, p.scored115, p.scored120, p.scored125, p.scored130, p.scored135, p.scored140, p.scored145, p.scored150, p.seqBonusI, p.seqBonusIIA, p.seqBonusIIB, p.seqBonusIII, p.modernBonusIIIM, p.modernBonusIIIL, p.choseSequence, p.choseMatching, p.choseLadder, p.seq3, p.seq4, p.match3, p.match4, p.ladders, p.incompleteSeqRows, p.incompleteMatchRows, p.incompleteLadderRows, p.digitsInIncomplete, p.digitsInBank, p.gamesOutscored, p.gamesTied];
   for (const v of vals) encodeVarInt(bytes, v);
+  for (let i = 0; i < 30; i++) encodeVarInt(bytes, (p.roundCats || [])[i] || 0);
 }
 function deserializePlayerStats(bytes, pos) {
   const d = () => decodeVarInt(bytes, pos);
@@ -2060,12 +2061,18 @@ function deserializePlayerStats(bytes, pos) {
     scored110: d(),
     scored115: d(),
     scored120: d(),
-    scored125plus: d(),
+    scored125: d(),
+    scored130: d(),
+    scored135: d(),
+    scored140: d(),
+    scored145: d(),
+    scored150: d(),
     seqBonusI: d(),
     seqBonusIIA: d(),
     seqBonusIIB: d(),
     seqBonusIII: d(),
-    modernBonusIII: d(),
+    modernBonusIIIM: d(),
+    modernBonusIIIL: d(),
     choseSequence: d(),
     choseMatching: d(),
     choseLadder: d(),
@@ -2080,7 +2087,10 @@ function deserializePlayerStats(bytes, pos) {
     digitsInIncomplete: d(),
     digitsInBank: d(),
     gamesOutscored: d(),
-    gamesTied: d()
+    gamesTied: d(),
+    roundCats: Array.from({
+      length: 30
+    }, () => d())
   };
 }
 function serializeMatchStats(bytes, m) {
@@ -2109,6 +2119,7 @@ function encodeStats(rollStats, gameStats, quadStats) {
   encodeVarInt(bytes, rollStats.solidRuns);
   encodeVarInt(bytes, rollStats.brokenRuns);
   for (let i = 0; i < 10; i++) encodeVarInt(bytes, rollStats.digitCounts[i]);
+  for (let i = 0; i < 30; i++) encodeVarInt(bytes, (rollStats.positionCounts || [])[i] || 0);
 
   // Game stats in fixed order
   const pageOrder = ['1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic', '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'];
@@ -2189,6 +2200,9 @@ function decodeStats(str) {
       brokenRuns: d(),
       digitCounts: Array.from({
         length: 10
+      }, () => d()),
+      positionCounts: Array.from({
+        length: 30
       }, () => d())
     };
     const pageOrder = ['1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic', '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'];
@@ -2241,22 +2255,39 @@ function computePlayerGameStats(grids, bankUsed, roundHistory, classicMode, laxP
   const scored110 = s >= 110 && s < 115 ? 1 : 0;
   const scored115 = s >= 115 && s < 120 ? 1 : 0;
   const scored120 = s >= 120 && s < 125 ? 1 : 0;
-  const scored125plus = s >= 125 ? 1 : 0;
+  const scored125 = s >= 125 && s < 130 ? 1 : 0;
+  const scored130 = s >= 130 && s < 135 ? 1 : 0;
+  const scored135 = s >= 135 && s < 140 ? 1 : 0;
+  const scored140 = s >= 140 && s < 145 ? 1 : 0;
+  const scored145 = s >= 145 && s < 150 ? 1 : 0;
+  const scored150 = s >= 150 ? 1 : 0;
 
   // Bonus unlocks (check from grid state)
   const seqBI = hasSequenceBonusI(grids) ? 1 : 0;
   const seqBIIA = hasSequenceBonusIIA(grids) ? 1 : 0;
   const seqBIIB = hasSequenceBonusIIB(grids) ? 1 : 0;
   const seqBIII = seqBonusIII ? 1 : 0;
-  const modBIII = modernBIII && !seqBonusIII ? 1 : 0;
+  // Modern Bonus III split: III-M (all matching filled) vs III-L (all ladder filled)
+  const modBIIIM = !seqBonusIII && !classicMode && grids.matching.every(row => scoreMatchingRow(row, laxPlacement) >= 20) ? 1 : 0;
+  const modBIIIL = !seqBonusIII && !classicMode && grids.ladder.every(row => scoreLadderRow(row, laxPlacement) >= 20) ? 1 : 0;
 
   // Category choices per round
   let choseSeq = 0,
     choseMatch = 0,
     choseLadder = 0;
-  for (const rh of roundHistory) {
-    const cat = rh.categories?.[playerIdx];
-    if (cat === 'sequence') choseSeq++;else if (cat === 'matching') choseMatch++;else if (cat === 'ladder') choseLadder++;
+  const roundCats = Array(30).fill(0); // [round*3 + catIdx]
+  for (let ri = 0; ri < roundHistory.length; ri++) {
+    const cat = roundHistory[ri].categories?.[playerIdx];
+    if (cat === 'sequence') {
+      choseSeq++;
+      roundCats[ri * 3]++;
+    } else if (cat === 'matching') {
+      choseMatch++;
+      roundCats[ri * 3 + 1]++;
+    } else if (cat === 'ladder') {
+      choseLadder++;
+      roundCats[ri * 3 + 2]++;
+    }
   }
 
   // Grid scoring details
@@ -2312,12 +2343,18 @@ function computePlayerGameStats(grids, bankUsed, roundHistory, classicMode, laxP
     scored110,
     scored115,
     scored120,
-    scored125plus,
+    scored125,
+    scored130,
+    scored135,
+    scored140,
+    scored145,
+    scored150,
     seqBI,
     seqBIIA,
     seqBIIB,
     seqBIII,
-    modBIII,
+    modBIIIM,
+    modBIIIL,
     choseSeq,
     choseMatch,
     choseLadder,
@@ -2333,7 +2370,8 @@ function computePlayerGameStats(grids, bankUsed, roundHistory, classicMode, laxP
     digitsInBank,
     r10Adj: r10Adj / 100,
     // convert percentage to fraction for summing
-    r10Guar
+    r10Guar,
+    roundCats
   };
 }
 window.Simili = function Simili() {
@@ -2345,6 +2383,7 @@ window.Simili = function Simili() {
   const [wideLayout, setWideLayout] = useState(false);
   const [verticalCategories, setVerticalCategories] = useState(false);
   const [cellHints, setCellHints] = useState(false);
+  const [extendedStats, setExtendedStats] = useState(false);
   const [musicVolume, setMusicVolume] = useState(0); // 0 to 1
 
   const [crossOut, setCrossOut] = useState(false);
@@ -2419,7 +2458,8 @@ window.Simili = function Simili() {
     stepDoubles: 0,
     solidRuns: 0,
     brokenRuns: 0,
-    digitCounts: Array(10).fill(0)
+    digitCounts: Array(10).fill(0),
+    positionCounts: Array(30).fill(0)
   });
 
   // Per-page game statistics. Keys: '1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic',
@@ -2438,12 +2478,18 @@ window.Simili = function Simili() {
     scored110: 0,
     scored115: 0,
     scored120: 0,
-    scored125plus: 0,
+    scored125: 0,
+    scored130: 0,
+    scored135: 0,
+    scored140: 0,
+    scored145: 0,
+    scored150: 0,
     seqBonusI: 0,
     seqBonusIIA: 0,
     seqBonusIIB: 0,
     seqBonusIII: 0,
-    modernBonusIII: 0,
+    modernBonusIIIM: 0,
+    modernBonusIIIL: 0,
     choseSequence: 0,
     choseMatching: 0,
     choseLadder: 0,
@@ -2459,7 +2505,9 @@ window.Simili = function Simili() {
     digitsInBank: 0,
     // 2P only:
     gamesOutscored: 0,
-    gamesTied: 0
+    gamesTied: 0,
+    // Per-round category choices: roundCats[round*3 + catIdx] where catIdx: 0=seq, 1=match, 2=ladder
+    roundCats: Array(30).fill(0)
   });
   const emptyMatchStats = () => ({
     matchesStarted: 0,
@@ -2518,27 +2566,43 @@ window.Simili = function Simili() {
 
   // --- Background Music Engine ---
   const audioRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const gainNodeRef = useRef(null);
   useEffect(() => {
     const audio = new Audio('music.mp3');
     audio.loop = true;
-    audio.volume = 0;
     audioRef.current = audio;
+
+    // Set up Web Audio API gain node for mobile volume control
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = ctx.createMediaElementSource(audio);
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    source.connect(gain);
+    gain.connect(ctx.destination);
+    audioCtxRef.current = ctx;
+    gainNodeRef.current = gain;
     return () => {
       audio.pause();
       audio.src = '';
+      ctx.close();
     };
   }, []);
 
-  // Update volume
+  // Update volume via gain node
   useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = musicVolume;
+    if (gainNodeRef.current && audioCtxRef.current) {
+      gainNodeRef.current.gain.setTargetAtTime(musicVolume, audioCtxRef.current.currentTime, 0.05);
+    }
   }, [musicVolume]);
 
   // Start/stop music based on volume only
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    const ctx = audioCtxRef.current;
+    if (!audio || !ctx) return;
     if (musicVolume > 0) {
+      if (ctx.state === 'suspended') ctx.resume();
       audio.play().catch(() => {});
     } else {
       audio.pause();
@@ -2875,10 +2939,14 @@ window.Simili = function Simili() {
           solidRuns = 0,
           brokenRuns = 0;
         const dc = Array(10).fill(0);
+        const pc = Array(30).fill(0); // [0-9] hundreds, [10-19] tens, [20-29] units
         for (const roll of rolls) {
           dc[roll[0]]++;
           dc[roll[1]]++;
           dc[roll[2]]++;
+          pc[roll[0]]++;
+          pc[10 + roll[1]]++;
+          pc[20 + roll[2]]++;
           const sorted = [...roll].sort((a, b) => a - b);
           const [a, b, c] = sorted;
           if (a === b && b === c) {
@@ -2927,7 +2995,8 @@ window.Simili = function Simili() {
           stepDoubles: prev.stepDoubles + stepDoubles,
           solidRuns: prev.solidRuns + solidRuns,
           brokenRuns: prev.brokenRuns + brokenRuns,
-          digitCounts: prev.digitCounts.map((c, i) => c + dc[i])
+          digitCounts: prev.digitCounts.map((c, i) => c + dc[i]),
+          positionCounts: prev.positionCounts.map((c, i) => c + pc[i])
         }));
       }
 
@@ -3005,12 +3074,18 @@ window.Simili = function Simili() {
               p.scored110 += ps.scored110;
               p.scored115 += ps.scored115;
               p.scored120 += ps.scored120;
-              p.scored125plus += ps.scored125plus;
+              p.scored125 += ps.scored125;
+              p.scored130 += ps.scored130;
+              p.scored135 += ps.scored135;
+              p.scored140 += ps.scored140;
+              p.scored145 += ps.scored145;
+              p.scored150 += ps.scored150;
               p.seqBonusI += ps.seqBI;
               p.seqBonusIIA += ps.seqBIIA;
               p.seqBonusIIB += ps.seqBIIB;
               p.seqBonusIII += ps.seqBIII;
-              p.modernBonusIII += ps.modBIII;
+              p.modernBonusIIIM += ps.modBIIIM;
+              p.modernBonusIIIL += ps.modBIIIL;
               p.choseSequence += ps.choseSeq;
               p.choseMatching += ps.choseMatch;
               p.choseLadder += ps.choseLadder;
@@ -3024,6 +3099,7 @@ window.Simili = function Simili() {
               p.incompleteLadderRows += ps.incLadderRows;
               p.digitsInIncomplete += ps.digitsInInc;
               p.digitsInBank += ps.digitsInBank;
+              p.roundCats = p.roundCats.map((c, i) => c + (ps.roundCats[i] || 0));
               if (twoPlayer) {
                 p.gamesOutscored += outscored;
                 p.gamesTied += tied;
@@ -3982,7 +4058,7 @@ window.Simili = function Simili() {
       textTransform: 'uppercase',
       letterSpacing: 1
     }
-  }, "Display/Audio"), /*#__PURE__*/React.createElement(ToggleSwitch, {
+  }, "Display"), /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: wideLayout,
     onChange: setWideLayout,
     leftLabel: "Narrow (mobile)",
@@ -4016,7 +4092,27 @@ window.Simili = function Simili() {
     rightLabel: "Cell Hints On"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
-      marginTop: 10,
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: extendedStats,
+    onChange: setExtendedStats,
+    leftLabel: "Hide Extra Stats",
+    rightLabel: "Show Extra Stats"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 'bold',
+      opacity: 0.5,
+      marginBottom: 6,
+      marginTop: 14,
+      textTransform: 'uppercase',
+      letterSpacing: 1,
+      borderTop: '1px dashed #ddd',
+      paddingTop: 10
+    }
+  }, "Audio"), /*#__PURE__*/React.createElement("div", {
+    style: {
       display: 'flex',
       alignItems: 'center',
       gap: 8
@@ -4575,7 +4671,8 @@ window.Simili = function Simili() {
       const g = rollStats.games;
       const perGame = total => g > 0 ? (total / g).toFixed(2) : '—';
       const digitNames = ['Zeros', 'Ones', 'Twos', 'Threes', 'Fours', 'Fives', 'Sixes', 'Sevens', 'Eights', 'Nines'];
-      const rows = [['Rolls', rollStats.rolls, g > 0 ? '10.0' : '—'], ['Triples (000~999)', rollStats.triples, perGame(rollStats.triples)], ['Doubles (00~99)', rollStats.doubles, perGame(rollStats.doubles)], ['Step Doubles (001~998)', rollStats.stepDoubles, perGame(rollStats.stepDoubles)], ['Solid Runs (012~987)', rollStats.solidRuns, perGame(rollStats.solidRuns)], ['Broken Runs (013~986)', rollStats.brokenRuns, perGame(rollStats.brokenRuns)], ...digitNames.map((name, i) => [name, rollStats.digitCounts[i], perGame(rollStats.digitCounts[i])])];
+      const posNames = ['Hundreds', 'Tens', 'Units'];
+      const rows = [['Rolls', rollStats.rolls, g > 0 ? '10.00' : '—'], ['Triples (000~999)', rollStats.triples, perGame(rollStats.triples)], ['Doubles (00~99)', rollStats.doubles, perGame(rollStats.doubles)], ['Step Doubles (001~998)', rollStats.stepDoubles, perGame(rollStats.stepDoubles)], ['Solid Runs (012~987)', rollStats.solidRuns, perGame(rollStats.solidRuns)], ['Broken Runs (013~986)', rollStats.brokenRuns, perGame(rollStats.brokenRuns)], ...digitNames.map((name, i) => [name, rollStats.digitCounts[i], perGame(rollStats.digitCounts[i])]), ...(extendedStats ? posNames.flatMap((pos, pi) => digitNames.map((name, di) => [`${name} in ${pos} Place`, (rollStats.positionCounts || [])[pi * 10 + di] || 0, perGame((rollStats.positionCounts || [])[pi * 10 + di] || 0)])) : [])];
       const thStyle = {
         padding: '4px 6px',
         borderBottom: '1.5px solid #999',
@@ -4778,126 +4875,171 @@ window.Simili = function Simili() {
           total: p.matchPointsScored,
           pg: div(p.matchPointsScored, M)
         });
-        rows.push({
-          label: 'Games Scored 100',
-          total: p.scored100,
-          pg: pct(p.scored100, M)
-        });
-        rows.push({
-          label: 'Games Scored 105',
-          total: p.scored105,
-          pg: pct(p.scored105, M)
-        });
-        rows.push({
-          label: 'Games Scored 110',
-          total: p.scored110,
-          pg: pct(p.scored110, M)
-        });
-        rows.push({
-          label: 'Games Scored 115',
-          total: p.scored115,
-          pg: pct(p.scored115, M)
-        });
-        rows.push({
-          label: 'Games Scored 120',
-          total: p.scored120,
-          pg: pct(p.scored120, M)
-        });
-        rows.push({
-          label: 'Games Scored 125+',
-          total: p.scored125plus,
-          pg: pct(p.scored125plus, M)
-        });
-        rows.push({
-          label: 'Sequence Bonus I Unlocks',
-          total: p.seqBonusI,
-          pg: pct(p.seqBonusI, M)
-        });
-        rows.push({
-          label: isClassic ? 'Sequence Bonus II Unlocks' : 'Sequence Bonus II-A Unlocks',
-          total: p.seqBonusIIA,
-          pg: pct(p.seqBonusIIA, M)
-        });
-        if (!isClassic) rows.push({
-          label: 'Sequence Bonus II-B Unlocks',
-          total: p.seqBonusIIB,
-          pg: pct(p.seqBonusIIB, M)
-        });
-        rows.push({
-          label: 'Sequence Bonus III Unlocks',
-          total: p.seqBonusIII,
-          pg: pct(p.seqBonusIII, M)
-        });
-        if (!isClassic) rows.push({
-          label: 'Modern Bonus III Unlocks',
-          total: p.modernBonusIII,
-          pg: pct(p.modernBonusIII, M)
-        });
-        rows.push({
-          label: 'Rounds Chose Sequence',
-          total: p.choseSequence,
-          pg: div(p.choseSequence, M)
-        });
-        rows.push({
-          label: 'Rounds Chose Matching',
-          total: p.choseMatching,
-          pg: div(p.choseMatching, M)
-        });
-        rows.push({
-          label: 'Rounds Chose Ladder',
-          total: p.choseLadder,
-          pg: div(p.choseLadder, M)
-        });
-        rows.push({
-          label: '3-Sequences Scored',
-          total: p.seq3,
-          pg: div(p.seq3, M)
-        });
-        rows.push({
-          label: '4-Sequences Scored',
-          total: p.seq4,
-          pg: div(p.seq4, M)
-        });
-        rows.push({
-          label: '3-Matchings Scored',
-          total: p.match3,
-          pg: div(p.match3, M)
-        });
-        rows.push({
-          label: '4-Matchings Scored',
-          total: p.match4,
-          pg: div(p.match4, M)
-        });
-        rows.push({
-          label: 'Ladders Scored',
-          total: p.ladders,
-          pg: div(p.ladders, M)
-        });
-        rows.push({
-          label: 'Incomplete Sequence Rows',
-          total: p.incompleteSeqRows,
-          pg: div(p.incompleteSeqRows, M)
-        });
-        rows.push({
-          label: 'Incomplete Matching Rows',
-          total: p.incompleteMatchRows,
-          pg: div(p.incompleteMatchRows, M)
-        });
-        rows.push({
-          label: 'Incomplete Ladder Rows',
-          total: p.incompleteLadderRows,
-          pg: div(p.incompleteLadderRows, M)
-        });
-        rows.push({
-          label: 'Digits in Incomplete Rows',
-          total: p.digitsInIncomplete,
-          pg: div(p.digitsInIncomplete, M)
-        });
-        rows.push({
-          label: 'Digits Left in Bank',
-          total: p.digitsInBank,
-          pg: div(p.digitsInBank, M)
-        });
+        if (extendedStats) {
+          rows.push({
+            label: 'Games Scored 100',
+            total: p.scored100,
+            pg: pct(p.scored100, M)
+          });
+          rows.push({
+            label: 'Games Scored 105',
+            total: p.scored105,
+            pg: pct(p.scored105, M)
+          });
+          rows.push({
+            label: 'Games Scored 110',
+            total: p.scored110,
+            pg: pct(p.scored110, M)
+          });
+          rows.push({
+            label: 'Games Scored 115',
+            total: p.scored115,
+            pg: pct(p.scored115, M)
+          });
+          rows.push({
+            label: 'Games Scored 120',
+            total: p.scored120,
+            pg: pct(p.scored120, M)
+          });
+          rows.push({
+            label: 'Games Scored 125',
+            total: p.scored125,
+            pg: pct(p.scored125, M)
+          });
+          rows.push({
+            label: 'Games Scored 130',
+            total: p.scored130,
+            pg: pct(p.scored130, M)
+          });
+          rows.push({
+            label: 'Games Scored 135',
+            total: p.scored135,
+            pg: pct(p.scored135, M)
+          });
+          rows.push({
+            label: 'Games Scored 140',
+            total: p.scored140,
+            pg: pct(p.scored140, M)
+          });
+          rows.push({
+            label: 'Games Scored 145',
+            total: p.scored145,
+            pg: pct(p.scored145, M)
+          });
+          rows.push({
+            label: 'Games Scored 150',
+            total: p.scored150,
+            pg: pct(p.scored150, M)
+          });
+          rows.push({
+            label: 'Sequence Bonus I Unlocks',
+            total: p.seqBonusI,
+            pg: pct(p.seqBonusI, M)
+          });
+          rows.push({
+            label: isClassic ? 'Sequence Bonus II Unlocks' : 'Sequence Bonus II-A Unlocks',
+            total: p.seqBonusIIA,
+            pg: pct(p.seqBonusIIA, M)
+          });
+          if (!isClassic) rows.push({
+            label: 'Sequence Bonus II-B Unlocks',
+            total: p.seqBonusIIB,
+            pg: pct(p.seqBonusIIB, M)
+          });
+          rows.push({
+            label: 'Sequence Bonus III Unlocks',
+            total: p.seqBonusIII,
+            pg: pct(p.seqBonusIII, M)
+          });
+          if (!isClassic) {
+            rows.push({
+              label: 'Modern Bonus III-M Unlocks',
+              total: p.modernBonusIIIM,
+              pg: pct(p.modernBonusIIIM, M)
+            });
+            rows.push({
+              label: 'Modern Bonus III-L Unlocks',
+              total: p.modernBonusIIIL,
+              pg: pct(p.modernBonusIIIL, M)
+            });
+          }
+          rows.push({
+            label: '3-Sequences Scored',
+            total: p.seq3,
+            pg: div(p.seq3, M)
+          });
+          rows.push({
+            label: '4-Sequences Scored',
+            total: p.seq4,
+            pg: div(p.seq4, M)
+          });
+          rows.push({
+            label: '3-Matchings Scored',
+            total: p.match3,
+            pg: div(p.match3, M)
+          });
+          rows.push({
+            label: '4-Matchings Scored',
+            total: p.match4,
+            pg: div(p.match4, M)
+          });
+          rows.push({
+            label: 'Ladders Scored',
+            total: p.ladders,
+            pg: div(p.ladders, M)
+          });
+          rows.push({
+            label: 'Incomplete Sequence Rows',
+            total: p.incompleteSeqRows,
+            pg: div(p.incompleteSeqRows, M)
+          });
+          rows.push({
+            label: 'Incomplete Matching Rows',
+            total: p.incompleteMatchRows,
+            pg: div(p.incompleteMatchRows, M)
+          });
+          rows.push({
+            label: 'Incomplete Ladder Rows',
+            total: p.incompleteLadderRows,
+            pg: div(p.incompleteLadderRows, M)
+          });
+          rows.push({
+            label: 'Digits in Incomplete Rows',
+            total: p.digitsInIncomplete,
+            pg: div(p.digitsInIncomplete, M)
+          });
+          rows.push({
+            label: 'Digits Left in Bank',
+            total: p.digitsInBank,
+            pg: div(p.digitsInBank, M)
+          });
+          rows.push({
+            label: 'Rounds Chose Sequence',
+            total: p.choseSequence,
+            pg: div(p.choseSequence, M)
+          });
+          rows.push({
+            label: 'Rounds Chose Matching',
+            total: p.choseMatching,
+            pg: div(p.choseMatching, M)
+          });
+          rows.push({
+            label: 'Rounds Chose Ladder',
+            total: p.choseLadder,
+            pg: div(p.choseLadder, M)
+          });
+          const catLabels = ['Sequence', 'Matching', 'Ladder'];
+          for (let r = 0; r < 10; r++) {
+            for (let c = 0; c < 3; c++) {
+              const val = (p.roundCats || [])[r * 3 + c] || 0;
+              rows.push({
+                label: `Round ${r + 1} chose ${catLabels[c]}`,
+                total: val,
+                pg: pct(val, M)
+              });
+            }
+          }
+        }
         return rows;
       };
       const thStyle = {
