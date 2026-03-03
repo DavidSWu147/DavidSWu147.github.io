@@ -2139,6 +2139,10 @@ function encodeStats(rollStats, gameStats, quadStats) {
     encodeVarInt(bytes, qs.qbOn);
     encodeVarInt(bytes, qs.qbGetP1);
     encodeVarInt(bytes, qs.qbGetP2);
+    encodeVarInt(bytes, qs.pityP1 || 0);
+    encodeVarInt(bytes, qs.pityP2 || 0);
+    encodeVarInt(bytes, qs.nonBonusQuadP1 || 0);
+    encodeVarInt(bytes, qs.nonBonusQuadP2 || 0);
   }
 
   // Checksum over all data bytes (before trimming)
@@ -2223,7 +2227,11 @@ function decodeStats(str) {
       quadStats[key] = {
         qbOn: d(),
         qbGetP1: d(),
-        qbGetP2: d()
+        qbGetP2: d(),
+        pityP1: d(),
+        pityP2: d(),
+        nonBonusQuadP1: d(),
+        nonBonusQuadP2: d()
       };
     }
     return {
@@ -2545,7 +2553,11 @@ window.Simili = function Simili() {
   const initQB = () => ({
     qbOn: 0,
     qbGetP1: 0,
-    qbGetP2: 0
+    qbGetP2: 0,
+    pityP1: 0,
+    pityP2: 0,
+    nonBonusQuadP1: 0,
+    nonBonusQuadP2: 0
   });
   const [quadStats, setQuadStats] = useState({
     '1p-single-modern': initQB(),
@@ -3121,10 +3133,23 @@ window.Simili = function Simili() {
             const qs = {
               ...prev[pageKey]
             };
+            const p1HasQB = hasQuadBonus(players[0].grids, laxPlacement);
+            const p2HasQB = twoPlayer ? hasQuadBonus(players[1].grids, laxPlacement) : false;
+            const p1Score = getPlayerFinalScore(players[0], classicMode, laxPlacement, false); // score without QB
+            const p2Score = twoPlayer ? getPlayerFinalScore(players[1], classicMode, laxPlacement, false) : 0;
             if (quadBonus) {
               qs.qbOn++;
-              if (hasQuadBonus(players[0].grids, laxPlacement)) qs.qbGetP1++;
-              if (twoPlayer && hasQuadBonus(players[1].grids, laxPlacement)) qs.qbGetP2++;
+              if (p1HasQB) {
+                qs.qbGetP1++;
+                if (p1Score < 100) qs.pityP1++;
+              }
+              if (p2HasQB) {
+                qs.qbGetP2++;
+                if (p2Score < 100) qs.pityP2++;
+              }
+            } else {
+              if (p1HasQB) qs.nonBonusQuadP1++;
+              if (p2HasQB) qs.nonBonusQuadP2++;
             }
             return {
               ...prev,
@@ -4600,7 +4625,7 @@ window.Simili = function Simili() {
         const qs = quadStats[key];
         const gs = gameStats[key];
         const totalGames = gs.p1.gamesFinished;
-        // Odd row: QB On
+        // QB On
         rows.push({
           label: `Quad Bonus On, ${label}`,
           p1Total: qs.qbOn,
@@ -4608,7 +4633,7 @@ window.Simili = function Simili() {
           p2Total: is2p ? qs.qbOn : '—',
           p2Pct: is2p ? pctFmt(qs.qbOn, totalGames) : '—'
         });
-        // Even row: QB Get
+        // QB Get
         rows.push({
           label: `Quad Bonus Get, ${label}`,
           p1Total: qs.qbGetP1,
@@ -4616,6 +4641,28 @@ window.Simili = function Simili() {
           p2Total: is2p ? qs.qbGetP2 : '—',
           p2Pct: is2p ? pctFmt(qs.qbGetP2, qs.qbOn) : '—'
         });
+      }
+      if (extendedStats) {
+        for (const [key, label, is2p] of keys) {
+          const qs = quadStats[key];
+          const gs = gameStats[key];
+          const totalGames = gs.p1.gamesFinished;
+          const qbOffGames = totalGames - qs.qbOn;
+          rows.push({
+            label: `Pity Bonus Get, ${label}`,
+            p1Total: qs.pityP1,
+            p1Pct: pctFmt(qs.pityP1, qs.qbOn),
+            p2Total: is2p ? qs.pityP2 : '—',
+            p2Pct: is2p ? pctFmt(qs.pityP2, qs.qbOn) : '—'
+          });
+          rows.push({
+            label: `Non Bonus Quad, ${label}`,
+            p1Total: qs.nonBonusQuadP1,
+            p1Pct: pctFmt(qs.nonBonusQuadP1, qbOffGames),
+            p2Total: is2p ? qs.nonBonusQuadP2 : '—',
+            p2Pct: is2p ? pctFmt(qs.nonBonusQuadP2, qbOffGames) : '—'
+          });
+        }
       }
       return /*#__PURE__*/React.createElement("table", {
         style: {
