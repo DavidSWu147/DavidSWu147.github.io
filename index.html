@@ -2248,7 +2248,7 @@ function decodeStats(str) {
 function computePlayerGameStats(grids, bankUsed, roundHistory, classicMode, laxPlacement, won, score, r10WinChance, playerIdx) {
   // Score without quad bonus: score from totalScore + bonusIII
   const baseScore = totalScore(grids, laxPlacement);
-  const seqBonusIII = classicMode ? hasSequenceBonusIII(grids) : false;
+  const seqBonusIII = hasSequenceBonusIII(grids);
   const modernBIII = !classicMode ? hasModernBonusIII(grids, laxPlacement) : false;
   const bonusIIIVal = seqBonusIII || modernBIII ? 5 : 0;
   const scoreNoQuad = baseScore + bonusIIIVal;
