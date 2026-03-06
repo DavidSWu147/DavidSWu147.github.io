@@ -805,11 +805,13 @@ function runSearch(ctx, unusedDigits) {
       const n3ps = new3PlusSeq + (opt.makes3PlusSeq ? 1 : 0);
 
       // Compute effective bonus books available (including dynamic unlocks)
+      // IMPORTANT: Use counts BEFORE current row's contribution to avoid circular dependency
+      // (can't use a bonus book unlocked by the very row being placed)
       let effectiveBonusMax = bonusBooks;
-      if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + n3ps >= 5) {
+      if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + new3PlusSeq >= 5) {
         if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
       }
-      if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + n4s >= 4) {
+      if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + new4Seq >= 4) {
         if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
       }
       if (isChosenCat) {
