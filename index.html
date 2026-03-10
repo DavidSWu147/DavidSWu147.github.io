@@ -10,7 +10,13 @@
 <body>
 <div id="root"></div>
 <script>
-const { useState, useEffect, useRef, useCallback } = React;
+const {
+  useState,
+  useEffect,
+  useRef,
+  useCallback
+} = React;
+
 // ============================================================
 // SIMILI - A Dice Game by David Wu
 // ============================================================
@@ -653,6 +659,21 @@ function buildSearchContext(grids, category, maxBook, bonusBooks, bonusConstrain
   // The at-least-one-Sequence constraint only applies in Modern when 2+ total bonus books
   // could be used (pre-existing + dynamically unlocked).
   const canHaveMultipleBonus = !classicMode && (bonusBooks >= 2 || bonusBooks >= 1 && (!seqBonusIIAUnlocked || !seqBonusIIBUnlocked) || !seqBonusIIAUnlocked && !seqBonusIIBUnlocked);
+
+  // Precompute 1-slot upgrade options per row for deferred bonus book usage.
+  // When a bonus book is dynamically unlocked (II-A/II-B) during the search,
+  // it might be best used on a row that was already processed and skipped.
+  // These arrays let us check that at terminal nodes without re-traversing.
+  const oneSlotUpgrades = [];
+  for (let i = 0; i < nRows; i++) {
+    const ups = [];
+    for (const opt of rowMoves[i].options) {
+      if (opt.slots === 1) {
+        ups.push(opt);
+      }
+    }
+    oneSlotUpgrades.push(ups);
+  }
   return {
     neededScore,
     baseBonusIII,
@@ -678,6 +699,7 @@ function buildSearchContext(grids, category, maxBook, bonusBooks, bonusConstrain
     seqBonusIIAUnlocked,
     seqBonusIIBUnlocked,
     canHaveMultipleBonus,
+    oneSlotUpgrades,
     alreadyWon: baseBonusIII && neededScore <= 5
   };
 }
@@ -710,11 +732,14 @@ function runSearch(ctx, unusedDigits) {
     classicMode,
     seqBonusIIAUnlocked,
     seqBonusIIBUnlocked,
-    canHaveMultipleBonus
+    canHaveMultipleBonus,
+    oneSlotUpgrades
   } = ctx;
   let found = false;
   const pool = new Int8Array(10);
   for (const d of unusedDigits) pool[d]++;
+  const rowUsed = new Uint8Array(nRows); // track which rows have placements
+
   function tryApply(opt, idx, mainUsed, bonusUsed, scoreGain, n4s, n3ps, mN, lN, isChosenCat, bonusSeqUsed) {
     let newMain, newBonus;
     if (isChosenCat) {
@@ -730,20 +755,27 @@ function runSearch(ctx, unusedDigits) {
     const newScore = scoreGain + opt.scoreGain;
     const bonusSlotsOnSeq = rowCat[idx] === 'sequence' ? isChosenCat ? opt.slots - Math.min(opt.slots, maxBook - mainUsed) : opt.slots : 0;
     const newBonusSeq = bonusSeqUsed + (bonusSlotsOnSeq > 0 ? bonusSlotsOnSeq : 0);
+    rowUsed[idx] = 1;
     if (opt.type === 'concrete') {
       const dc = opt.digitCost;
-      for (let d = 0; d <= 9; d++) if (dc[d] > pool[d]) return;
+      for (let d = 0; d <= 9; d++) if (dc[d] > pool[d]) {
+        rowUsed[idx] = 0;
+        return;
+      }
       for (let d = 0; d <= 9; d++) pool[d] -= dc[d];
       search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
       for (let d = 0; d <= 9; d++) pool[d] += dc[d];
     } else if (opt.type === 'matchFixed') {
-      if (pool[opt.digit] < opt.count) return;
+      if (pool[opt.digit] < opt.count) {
+        rowUsed[idx] = 0;
+        return;
+      }
       pool[opt.digit] -= opt.count;
       search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
       pool[opt.digit] += opt.count;
     } else if (opt.type === 'matchAny') {
       for (let d = 0; d <= 9; d++) {
-        if (found) return;
+        if (found) break;
         if (pool[d] >= opt.count) {
           pool[d] -= opt.count;
           search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
@@ -752,7 +784,7 @@ function runSearch(ctx, unusedDigits) {
       }
     } else if (opt.type === 'ladderAny') {
       for (let p = 0; p < 10; p++) {
-        if (found) return;
+        if (found) break;
         const y = (p + 1) % 10;
         if (pool[p] >= 2 && pool[y] >= 2) {
           pool[p] -= 2;
@@ -763,6 +795,7 @@ function runSearch(ctx, unusedDigits) {
         }
       }
     }
+    rowUsed[idx] = 0;
   }
   function search(idx, mainUsed, bonusUsed, scoreGain, new4Seq, new3PlusSeq, mNot20, lNot20, bonusSeqUsed) {
     if (found) return;
@@ -781,7 +814,119 @@ function runSearch(ctx, unusedDigits) {
       found = true;
       return;
     }
-    if (idx >= nRows) return;
+    if (idx >= nRows) {
+      // Check if dynamically-unlocked bonus books remain that could be used
+      // on previously-skipped rows (the search processes rows sequentially and
+      // can't revisit them, but in reality bonus books can go to any row).
+      let effectiveBonusMax = bonusBooks;
+      if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + new3PlusSeq >= 5) {
+        if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
+      }
+      if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + new4Seq >= 4) {
+        if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
+      }
+      const remainingBonus = effectiveBonusMax - bonusUsed;
+      if (remainingBonus > 0) {
+        // Collect all feasible 1-slot upgrades on unused rows, sorted by score gain desc.
+        // Since remainingBonus is at most 2, we just need the top 1 or 2 upgrades.
+        const feasibleUpgrades = [];
+        for (let ri = 0; ri < nRows; ri++) {
+          if (rowUsed[ri]) continue;
+          const ups = oneSlotUpgrades[ri];
+          for (let ui = 0; ui < ups.length; ui++) {
+            const up = ups[ui];
+            let feasible = true;
+            if (up.type === 'concrete') {
+              const dc = up.digitCost;
+              for (let d = 0; d <= 9; d++) if (dc[d] > pool[d]) {
+                feasible = false;
+                break;
+              }
+            } else if (up.type === 'matchFixed') {
+              if (pool[up.digit] < up.count) feasible = false;
+            }
+            if (feasible) {
+              feasibleUpgrades.push({
+                scoreGain: up.scoreGain,
+                isSeq: rowCat[ri] === 'sequence',
+                ri,
+                up
+              });
+            }
+          }
+        }
+        if (feasibleUpgrades.length > 0) {
+          // Sort by score gain descending
+          feasibleUpgrades.sort((a, b) => b.scoreGain - a.scoreGain);
+          // Try using up to remainingBonus upgrades (greedily pick best)
+          // For 1 remaining bonus: just take the best
+          // For 2 remaining bonuses: take the best two (if they don't conflict on digits/rows)
+          // Since this is rare (at most 2), just try combinations
+          if (remainingBonus === 1) {
+            const best = feasibleUpgrades[0];
+            const newEffective = effectiveScore + best.scoreGain;
+            if (newEffective >= neededScore) {
+              const newBonusUsed = bonusUsed + 1;
+              const newBonusSeq = bonusSeqUsed + (best.isSeq ? 1 : 0);
+              if (!canHaveMultipleBonus || newBonusUsed < 2 || newBonusSeq > 0) {
+                found = true;
+              }
+            }
+          } else {
+            // remainingBonus >= 2: try best single, then best pair
+            const best = feasibleUpgrades[0];
+            const singleEffective = effectiveScore + best.scoreGain;
+            if (singleEffective >= neededScore) {
+              const newBonusUsed = bonusUsed + 1;
+              const newBonusSeq = bonusSeqUsed + (best.isSeq ? 1 : 0);
+              if (!canHaveMultipleBonus || newBonusUsed < 2 || newBonusSeq > 0) {
+                found = true;
+              }
+            }
+            if (!found) {
+              // Try pairs from different rows
+              for (let i = 0; i < feasibleUpgrades.length && !found; i++) {
+                for (let j = i + 1; j < feasibleUpgrades.length && !found; j++) {
+                  const a = feasibleUpgrades[i],
+                    b = feasibleUpgrades[j];
+                  if (a.ri === b.ri) continue; // same row, can't upgrade twice
+                  // Check combined digit feasibility
+                  let combinedOk = true;
+                  if (a.up.type === 'concrete' && b.up.type === 'concrete') {
+                    for (let d = 0; d <= 9; d++) {
+                      if ((a.up.digitCost[d] || 0) + (b.up.digitCost[d] || 0) > pool[d]) {
+                        combinedOk = false;
+                        break;
+                      }
+                    }
+                  } else if (a.up.type === 'matchFixed' && b.up.type === 'matchFixed') {
+                    if (a.up.digit === b.up.digit) {
+                      if (a.up.count + b.up.count > pool[a.up.digit]) combinedOk = false;
+                    } else {
+                      if (pool[a.up.digit] < a.up.count || pool[b.up.digit] < b.up.count) combinedOk = false;
+                    }
+                  } else {
+                    // Mixed types - check each independently (conservative: may rarely double-count a digit)
+                    // Since these are 1-slot ops consuming 1 digit each, conflict is rare
+                  }
+                  if (combinedOk) {
+                    const pairEffective = effectiveScore + a.scoreGain + b.scoreGain;
+                    if (pairEffective >= neededScore) {
+                      const newBonusUsed = bonusUsed + 2;
+                      const newBonusSeq = bonusSeqUsed + (a.isSeq ? 1 : 0) + (b.isSeq ? 1 : 0);
+                      if (!canHaveMultipleBonus || newBonusUsed < 2 || newBonusSeq > 0) {
+                        found = true;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      return;
+    }
     if (effectiveScore + suffixMax[idx] + 5 < neededScore) return;
 
     // Skip this row
