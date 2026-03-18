@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SIMILI</title>
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 </head>
@@ -3423,11 +3424,17 @@ window.Simili = function Simili() {
     setMatchGameNum(prev => prev + 1);
     setMatchPhase('playing');
     resetGameState();
+    setShowSettings(false);
+    setShowStatistics(false);
+    setShowGameLogs(false);
   };
   const handleSuddenDeath = () => {
     matchHadSuddenDeathRef.current = true;
     setMatchPhase('sudden-death');
     resetGameState();
+    setShowSettings(false);
+    setShowStatistics(false);
+    setShowGameLogs(false);
   };
   const handleReset = () => {
     setRound(0);
@@ -3449,6 +3456,8 @@ window.Simili = function Simili() {
       matchCounterRef.current++;
       logGroupIdRef.current++;
     }
+    setShowStatistics(false);
+    setShowGameLogs(false);
   };
   const computeMatchResult = scores => {
     const p1Total = scores.reduce((s, g) => s + g.p1, 0);
