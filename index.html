@@ -1243,6 +1243,28 @@ function computeOuts(winningRolls) {
       }
     }
   }
+
+  // Sort outs by category (most likely first), then lexicographically within category
+  // Categories: 1-digit, 2-different, 2-same (double), 3-different, pair+single, triple, *
+  const outCategory = s => {
+    if (s === '*') return 5;
+    if (s.length === 1) return 0;
+    if (s.length === 2) {
+      return s[0] !== s[1] ? 1 : 2; // 2-different before 2-same
+    }
+    if (s.length === 3) {
+      if (s[0] !== s[1] && s[1] !== s[2]) return 3; // all different
+      if (s[0] === s[1] && s[1] === s[2]) return 5; // triple
+      return 4; // pair + single
+    }
+    return 6;
+  };
+  outs.sort((a, b) => {
+    const ca = outCategory(a),
+      cb = outCategory(b);
+    if (ca !== cb) return ca - cb;
+    return a.localeCompare(b);
+  });
   return outs.join('/');
 }
 
