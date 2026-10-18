@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="ai/simili-solver.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -312,7 +313,8 @@ function createPlayerState() {
     bonusBookSource: null,
     undoStack: [],
     roundDone: false,
-    bookedPerRound: []
+    bookedPerRound: [],
+    hint: null // { note, cells } while the board shows the Hint's booking
   };
 }
 function hasQuadBonus(grids, laxPlacement) {
@@ -1006,7 +1008,9 @@ function runSearch(ctx, unusedDigits) {
 }
 
 // Compute win chances for all 3 categories for a player
-function computeRound10WinChances(ps, existingBankDigits, classicMode, laxPlacement) {
+// Legacy round-10 calculator. Not exact (see ai/README.md); kept as a fallback for
+// when ai/simili-solver.js is missing, and as an independent check in ai/test.
+function computeRound10WinChancesLegacy(ps, existingBankDigits, classicMode, laxPlacement) {
   const results = {};
   const allRowMoves = buildRowMovesOpt(ps.grids, laxPlacement);
 
@@ -1064,6 +1068,28 @@ function computeRound10WinChances(ps, existingBankDigits, classicMode, laxPlacem
       outs: computeOuts(winningRolls)
     };
   }
+  return results;
+}
+
+// Round 10 win chances from the exact solver (ai/simili-solver.js), same output as the
+// legacy calculator: { sequence: { winPct, outs }, matching: ..., ladder: ... }.
+function computeRound10WinChances(ps, existingBankDigits, classicMode, laxPlacement) {
+  if (typeof SimiliSolver === 'undefined') return computeRound10WinChancesLegacy(ps, existingBankDigits, classicMode, laxPlacement);
+  const {
+    state
+  } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(ps) : ps, existingBankDigits);
+  const solver = previewMainSolver(classicMode);
+  const results = {};
+  ['sequence', 'matching', 'ladder'].forEach((category, cat) => {
+    const {
+      weight,
+      rolls
+    } = solver.winningRolls(state, cat);
+    results[category] = {
+      winPct: weight / 10,
+      outs: computeOuts(rolls)
+    };
+  });
   return results;
 }
 
@@ -1383,6 +1409,7 @@ function GridCell({
   onClick,
   clickable,
   highlight,
+  hinted,
   hints
 }) {
   return /*#__PURE__*/React.createElement("div", {
@@ -1390,14 +1417,14 @@ function GridCell({
     style: {
       width: 36,
       height: 36,
-      border: '1.5px solid #888',
+      border: hinted ? '1.5px solid #b8860b' : '1.5px solid #888',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 20,
       color: '#2a2a2a',
-      background: clickable ? '#fffde6' : highlight ? '#e8f5e9' : '#fff',
+      background: clickable ? '#fffde6' : hinted ? '#f7e08a' : highlight ? '#e8f5e9' : '#fff',
       cursor: clickable ? 'pointer' : 'default',
       transition: 'background 0.15s',
       position: 'relative'
@@ -1571,6 +1598,368 @@ function ToggleSwitch({
   }, rightLabel));
 }
 
+// --- Next-round preview (exact solver in ai/simili-solver.js) ---
+// Round 9 -> Round 10 odds are computed on the page (about a millisecond).
+// Round 8 -> Round 9 odds take seconds to minutes, so they run in Web Workers,
+// each worker evaluating one category over a slice of the 220 rolls.
+const previewMainSolvers = {};
+function previewMainSolver(classicMode) {
+  const k = classicMode ? 'c' : 'm';
+  if (!previewMainSolvers[k]) previewMainSolvers[k] = new SimiliSolver.Solver({
+    classic: classicMode
+  });
+  return previewMainSolvers[k];
+}
+
+// --- Lax Placement adapter ---
+// Under Lax Placement a Matching or Ladder row's future depends only on which digits
+// it holds, not where they sit, so the solver gets the same row in strict layout:
+// Matching copies packed to the left, Ladder digits each in their own pair (XXYY).
+function laxRowToStrict(cat, row) {
+  const f = row.filter(c => c !== null);
+  if (cat === 'matching') return [0, 1, 2, 3].map(i => i < f.length ? f[0] : null);
+  if (cat === 'ladder') {
+    const ds = [...new Set(f)].sort((a, b) => a - b);
+    if (ds.length === 0) return [null, null, null, null];
+    // order the pair so a wrap like 9/0 still reads x, x+1
+    const [a, b] = ds.length === 1 ? [ds[0], null] : ds[1] - ds[0] === 1 ? ds : [ds[1], ds[0]];
+    const na = f.filter(x => x === a).length,
+      nb = b === null ? 0 : f.filter(x => x === b).length;
+    return [na >= 1 ? a : null, na >= 2 ? a : null, nb >= 1 ? b : null, nb >= 2 ? b : null];
+  }
+  return [...row];
+}
+function laxPlayerToStrict(p) {
+  const g = {};
+  for (const cat of ['sequence', 'matching', 'ladder']) g[cat] = p.grids[cat].map(r => laxRowToStrict(cat, r));
+  return {
+    ...p,
+    grids: g
+  };
+}
+// Map the solver's placements (made on the strict-layout rows) onto the player's real
+// rows: same row, same digits, put into that row's empty cells. Lax legality only
+// depends on the digits, so any cells are legal; we pick the ones that make the row
+// look most like the strict pattern, otherwise leftmost first.
+function placementsToLax(grids, placements) {
+  const out = [],
+    groups = new Map();
+  for (const pl of placements) {
+    if (pl.category === 'sequence') {
+      out.push(pl);
+      continue;
+    }
+    const k = pl.category + '-' + pl.row;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(pl);
+  }
+  for (const list of groups.values()) {
+    const {
+      category,
+      row
+    } = list[0];
+    const actual = grids[category][row];
+    const empties = [0, 1, 2, 3].filter(i => actual[i] === null);
+    const finalDigits = actual.filter(c => c !== null).concat(list.map(pl => pl.digit));
+    let target = [null, null, null, null];
+    if (category === 'ladder') {
+      const t = laxRowToStrict('ladder', finalDigits);
+      const flip = [t[2], t[3], t[0], t[1]];
+      const fit = x => [0, 1, 2, 3].filter(i => actual[i] !== null && actual[i] === x[i]).length;
+      target = fit(flip) > fit(t) ? flip : t;
+    }
+    const todo = [...list],
+      cells = [...empties];
+    // first: empty cells whose strict-pattern digit we are placing
+    for (const i of empties) {
+      const j = todo.findIndex(pl => pl.digit === target[i]);
+      if (target[i] !== null && j >= 0) {
+        out.push({
+          ...todo[j],
+          col: i
+        });
+        todo.splice(j, 1);
+        cells.splice(cells.indexOf(i), 1);
+      }
+    }
+    // then the rest, leftmost first
+    for (const pl of todo) out.push({
+      ...pl,
+      col: cells.shift()
+    });
+  }
+  return out;
+}
+function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
+  let cancelled = false;
+  const workers = [];
+  const cancel = () => {
+    cancelled = true;
+    workers.forEach(w => w.terminate());
+  };
+  if (roundsLeft <= 1) {
+    const r = previewMainSolver(classicMode).analyzeRoundStart(state, roundsLeft);
+    setTimeout(() => {
+      if (!cancelled) onDone(r);
+    }, 0);
+    return cancel;
+  }
+  const CHUNK = 10,
+    N = SimiliSolver.ROLLS.length;
+  const tasks = [];
+  for (let r0 = 0; r0 < N; r0 += CHUNK) for (let cat = 0; cat < 3; cat++) tasks.push({
+    cat,
+    r0,
+    r1: Math.min(N, r0 + CHUNK)
+  });
+  const sums = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  let next = 0,
+    done = 0;
+  const msg = t => ({
+    rows: Array.from(state.rows),
+    bank: Array.from(state.bank),
+    usedA: state.usedA,
+    usedB: state.usedB,
+    classic: classicMode,
+    cat: t.cat,
+    roundsLeft,
+    r0: t.r0,
+    r1: t.r1
+  });
+  const finishTask = (t, v) => {
+    for (let i = 0; i < 3; i++) sums[t.cat][i] += v[i];
+    done++;
+    onProgress(done / tasks.length);
+    if (done === tasks.length) {
+      cancel();
+      onDone(SimiliSolver.summarize(sums, roundsLeft));
+    }
+  };
+  // Main-thread fallback (e.g. page opened from a file, where workers are blocked)
+  const runOnMainThread = () => {
+    const solver = previewMainSolver(classicMode);
+    const step = () => {
+      if (cancelled || next >= tasks.length) return;
+      const t = tasks[next++];
+      finishTask(t, solver.categoryValueRange(state, t.cat, roundsLeft, t.r0, t.r1));
+      setTimeout(step, 0);
+    };
+    setTimeout(step, 0);
+  };
+  let nWorkers = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1));
+  try {
+    for (let i = 0; i < nWorkers; i++) {
+      const w = new Worker('ai/simili-worker.js');
+      const feed = () => {
+        if (cancelled || next >= tasks.length) return;
+        const t = tasks[next++];
+        w.currentTask = t;
+        w.postMessage(msg(t));
+      };
+      w.onmessage = e => {
+        if (!cancelled) {
+          finishTask(w.currentTask, e.data.v);
+          feed();
+        }
+      };
+      w.onerror = e => {
+        e.preventDefault();
+        if (cancelled) return;
+        // a worker failed to load: give its task back and continue without workers
+        if (w.currentTask) tasks.push(w.currentTask);
+        workers.forEach(x => x.terminate());
+        workers.length = 0;
+        if (!cancelled) runOnMainThread();
+      };
+      workers.push(w);
+    }
+    workers.forEach(w => {
+      const t = tasks[next++];
+      if (t) {
+        w.currentTask = t;
+        w.postMessage(msg(t));
+      }
+    });
+  } catch (err) {
+    workers.forEach(x => x.terminate());
+    workers.length = 0;
+    runOnMainThread();
+  }
+  return cancel;
+}
+function NextRoundPreview({
+  ps,
+  bank,
+  round,
+  classicMode,
+  laxPlacement,
+  redInk,
+  autoRun
+}) {
+  const nextRound = round + 2; // round is 0-based; this previews the start of the next round
+  const roundsLeft = TOTAL_ROUNDS - 1 - round;
+  const key = JSON.stringify([ps.grids, ps.bankUsed, ps.seqBonusIIAUsed, ps.seqBonusIIACategory, ps.seqBonusIIBUsed, ps.seqBonusIIBCategory, classicMode]);
+  const [result, setResult] = useState(null); // last result shown: { key, r }
+  const seenRef = useRef(new Map()); // every preview computed for this round, by booking
+  const [job, setJob] = useState(null); // { key, progress, started }
+  const cancelRef = useRef(null);
+  const [, setTick] = useState(0);
+  useEffect(() => () => {
+    if (cancelRef.current) cancelRef.current();
+  }, []);
+  // a running preview for a booking that has since changed is cancelled
+  useEffect(() => {
+    if (job && job.key !== key) {
+      if (cancelRef.current) cancelRef.current();
+      cancelRef.current = null;
+      setJob(null);
+    }
+  }, [key]);
+  useEffect(() => {
+    if (!job) return;
+    const t = setInterval(() => setTick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [job]);
+  const start = () => {
+    const {
+      state
+    } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(ps) : ps, bank.map(b => b.digit));
+    const myKey = key;
+    setJob({
+      key: myKey,
+      progress: 0,
+      started: Date.now()
+    });
+    cancelRef.current = startPreviewJob(state, roundsLeft, classicMode, p => setJob(j => j && j.key === myKey ? {
+      ...j,
+      progress: p
+    } : j), r => {
+      cancelRef.current = null;
+      setJob(null);
+      seenRef.current.set(myKey, r);
+      setResult({
+        key: myKey,
+        r
+      });
+    });
+  };
+  useEffect(() => {
+    if (autoRun && !job && !seenRef.current.has(key)) start();
+  }, [autoRun, key]);
+  const stop = () => {
+    if (cancelRef.current) cancelRef.current();
+    cancelRef.current = null;
+    setJob(null);
+  };
+  // a booking previewed before shows its result again straight away
+  useEffect(() => {
+    const seen = seenRef.current.get(key);
+    if (seen) setResult({
+      key,
+      r: seen
+    });
+  }, [key]);
+  const stale = result && result.key !== key;
+  const allTied = result && result.r.categories.every(c => c.value.join() === result.r.categories[0].value.join());
+  const btnStyle = primary => ({
+    fontFamily: "'Special Elite', 'Courier New', monospace",
+    fontSize: 12,
+    padding: '4px 10px',
+    background: primary ? '#eef4ff' : '#fff',
+    color: primary ? '#2a4f8f' : '#888',
+    border: primary ? '1.5px solid #6d8fc9' : '1.5px solid #ccc',
+    borderRadius: 4,
+    cursor: 'pointer'
+  });
+  const elapsed = job ? Math.round((Date.now() - job.started) / 1000) : 0;
+  const pct = job ? Math.round(job.progress * 100) : 0;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      paddingTop: 8,
+      borderTop: '1px dotted #ddd'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, !job && (!result || stale) && /*#__PURE__*/React.createElement("button", {
+    onClick: start,
+    style: btnStyle(true)
+  }, `🔍 Preview Round ${nextRound} odds`), job && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 120,
+      height: 8,
+      background: '#eee',
+      borderRadius: 4,
+      overflow: 'hidden'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${pct}%`,
+      height: '100%',
+      background: '#6d8fc9',
+      transition: 'width 0.3s'
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      opacity: 0.7
+    }
+  }, `${pct}% · ${elapsed}s`), /*#__PURE__*/React.createElement("button", {
+    onClick: stop,
+    style: btnStyle(false)
+  }, "Cancel")), !job && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      opacity: 0.6
+    }
+  }, result && !stale ? `Round ${nextRound} odds if you end the round now` : stale ? 'Booking changed since the last preview' : 'Nothing is committed until you end the round')), result && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      marginTop: 6,
+      opacity: stale ? 0.35 : 1
+    }
+  }, result.r.categories.map(c => {
+    const best = c.category === result.r.best && !allTied;
+    const zero = c.winPct === 0,
+      full = c.winPct === 100;
+    return /*#__PURE__*/React.createElement("div", {
+      key: c.category,
+      title: `${c.category}: ${c.winPctExact}% to win` + (c.pointsIfWin !== null ? `, ${c.pointsIfWinText} points on average when winning` : ''),
+      style: {
+        flex: 1,
+        textAlign: 'center',
+        padding: '4px 2px',
+        borderRadius: 4,
+        border: best ? '2px solid #2a2a2a' : '1px solid #ddd',
+        background: best ? '#fff' : '#fafafa'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 'bold'
+      }
+    }, c.category[0].toUpperCase(), best ? ' ★' : ''), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14,
+        fontWeight: zero || full ? 'bold' : 'normal',
+        color: zero ? redInk : full ? '#27ae60' : '#2a2a2a'
+      }
+    }, `${c.winPctExact}%`), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10,
+        opacity: 0.65
+      }
+    }, c.pointsIfWin !== null ? `${c.pointsIfWinText} if win` : 'no win'));
+  })));
+}
+
 // --- Player Scoresheet Component ---
 function PlayerSheet({
   playerIdx,
@@ -1588,6 +1977,7 @@ function PlayerSheet({
   onToggleBankSelection,
   onBookDigit,
   onUndo,
+  onHint,
   onEndRound,
   onUseBonusBook,
   onEndBonusBook,
@@ -1595,7 +1985,8 @@ function PlayerSheet({
   twoPlayer,
   redInk,
   winChances,
-  quadBonus
+  quadBonus,
+  hintsOn
 }) {
   const grids = ps.grids;
   const seqBonusI = hasSequenceBonusI(grids);
@@ -1926,6 +2317,7 @@ function PlayerSheet({
         value: cell,
         clickable: canPlaceInCell(colIdx),
         highlight: scoringCells.has(colIdx),
+        hinted: phase === 'book' && !ps.roundDone && !!ps.hint && ps.hint.cells.includes(`${cat}-${rowIdx}-${colIdx}`),
         onClick: () => onBookDigit(playerIdx, cat, rowIdx, colIdx),
         hints: rowHints ? rowHints[colIdx] : null
       })), rowScore > 0 && /*#__PURE__*/React.createElement("span", {
@@ -2017,7 +2409,27 @@ function PlayerSheet({
       e.target.style.color = '#888';
       e.target.style.borderColor = '#ccc';
     }
-  }, "\u21A9 Undo"), /*#__PURE__*/React.createElement("button", {
+  }, "\u21A9 Undo"), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 2 && typeof SimiliSolver !== 'undefined' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: () => onHint(playerIdx),
+    title: ps.hint ? 'Take back the suggested booking' : 'Book the best play for this round',
+    style: {
+      fontFamily: "'Special Elite', 'Courier New', monospace",
+      fontSize: 12,
+      padding: '4px 10px',
+      background: ps.hint ? '#d4a017' : '#fffde6',
+      color: ps.hint ? '#fff' : '#8b6914',
+      border: '1.5px solid #b8860b',
+      borderRadius: 4,
+      cursor: 'pointer',
+      fontWeight: ps.hint ? 'bold' : 'normal',
+      boxShadow: ps.hint ? '0 0 0 2px #f5e6a8' : 'none'
+    }
+  }, "\uD83D\uDCA1 Hint"), ps.hint && ps.hint.note && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: '#8b6914'
+    }
+  }, ps.hint.note)), /*#__PURE__*/React.createElement("button", {
     onClick: () => onEndRound(playerIdx),
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2030,7 +2442,15 @@ function PlayerSheet({
       cursor: 'pointer',
       marginLeft: 'auto'
     }
-  }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round')))), phase === 'endgame-bonus' && !ps.bonusBookPhase && !ps.roundDone && (() => {
+  }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round'))), phase === 'book' && !ps.bonusBookPhase && (round === TOTAL_ROUNDS - 3 || round === TOTAL_ROUNDS - 2) && hintsOn && typeof SimiliSolver !== 'undefined' && /*#__PURE__*/React.createElement(NextRoundPreview, {
+    ps: ps,
+    bank: bank,
+    round: round,
+    classicMode: classicMode,
+    laxPlacement: laxPlacement,
+    redInk: redInk,
+    autoRun: !!ps.hint && round === TOTAL_ROUNDS - 2
+  })), phase === 'endgame-bonus' && !ps.bonusBookPhase && !ps.roundDone && (() => {
     const anyUnused = ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed || ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed;
     return /*#__PURE__*/React.createElement("div", {
       style: {
@@ -2137,7 +2557,7 @@ function PlayerSheet({
         color: earned ? '#27ae60' : '#999'
       }
     }, earned ? '✓ (+1)' : '○'));
-  })(), laxPlacement && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Lax Placement On"))));
+  })(), laxPlacement && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Lax Placement On")), hintsOn && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Hints On"))));
 }
 
 // --- Main Game Component ---
@@ -2570,6 +2990,8 @@ window.Simili = function Simili() {
   const [classicMode, setClassicMode] = useState(false);
   const [quadBonus, setQuadBonus] = useState(false);
   const [laxPlacement, setLaxPlacement] = useState(false);
+  const [hintsOn, setHintsOn] = useState(false); // next-round odds preview + Hint button
+
   const [seedRolls, setSeedRolls] = useState(null);
   const [isSeededGame, setIsSeededGame] = useState(false);
   const allSeedsRef = useRef(null);
@@ -2844,6 +3266,7 @@ window.Simili = function Simili() {
           bookingsThisRound: 0,
           undoStack: [],
           roundDone: false,
+          hint: null,
           bookedPerRound: [...p.bookedPerRound, []]
         })));
         return newBank;
@@ -2915,6 +3338,7 @@ window.Simili = function Simili() {
         grids: newGrids,
         bankUsed: newBankUsed,
         selectedBankIndices: [],
+        hint: null,
         undoStack: [...p.undoStack, snapshot]
       };
       // Track booked digit for game log
@@ -2945,6 +3369,107 @@ window.Simili = function Simili() {
       return ns;
     });
   };
+
+  // --- Hint (rounds 9 and 10): book the solver's best play, or take it back ---
+  // Applies placements with the same bookkeeping as handleBookDigit, one undo step each.
+  const bookPlacement = (p, pl) => {
+    const category = pl.category,
+      digit = bank[pl.bankIdx].digit;
+    const snapshot = {
+      grids: {
+        sequence: p.grids.sequence.map(r => [...r]),
+        matching: p.grids.matching.map(r => [...r]),
+        ladder: p.grids.ladder.map(r => [...r])
+      },
+      bankUsed: [...p.bankUsed],
+      bookingsThisRound: p.bookingsThisRound,
+      maxBooking: p.maxBooking,
+      bonusBookPhase: false,
+      bonusBookSource: null,
+      seqBonusIIAUsed: p.seqBonusIIAUsed,
+      seqBonusIIBUsed: p.seqBonusIIBUsed,
+      seqBonusIIAUnlocked: p.seqBonusIIAUnlocked,
+      seqBonusIIBUnlocked: p.seqBonusIIBUnlocked,
+      seqBonusIIACategory: p.seqBonusIIACategory,
+      seqBonusIIBCategory: p.seqBonusIIBCategory,
+      bookedPerRound: p.bookedPerRound.map(arr => [...arr])
+    };
+    const grids = {
+      ...p.grids
+    };
+    grids[category] = p.grids[category].map((r, ri) => ri === pl.row ? r.map((c, ci) => ci === pl.col ? digit : c) : [...r]);
+    const bankUsed = [...p.bankUsed];
+    bankUsed[pl.bankIdx] = true;
+    const entry = {
+      digit,
+      category,
+      rowIdx: pl.row,
+      colIdx: pl.col,
+      bonusSource: pl.bonus || null
+    };
+    const ns = {
+      ...p,
+      grids,
+      bankUsed,
+      undoStack: [...p.undoStack, snapshot],
+      bookedPerRound: p.bookedPerRound.map((arr, i) => i === p.bookedPerRound.length - 1 ? [...arr, entry] : arr)
+    };
+    if (hasSequenceBonusIIA(grids)) ns.seqBonusIIAUnlocked = true;
+    if (!classicMode && hasSequenceBonusIIB(grids)) ns.seqBonusIIBUnlocked = true;
+    if (pl.bonus === 'A') {
+      ns.seqBonusIIAUsed = true;
+      ns.seqBonusIIACategory = category === 'sequence' ? 'S' : '?';
+    } else if (pl.bonus === 'B') {
+      ns.seqBonusIIBUsed = true;
+      ns.seqBonusIIBCategory = category === 'sequence' ? 'S' : '?';
+    } else ns.bookingsThisRound = p.bookingsThisRound + 1;
+    return ns;
+  };
+  // the player as they were before booking anything this round
+  const roundStartOf = p => p.undoStack.length === 0 ? {
+    ...p
+  } : {
+    ...p,
+    ...p.undoStack[0],
+    bonusBookPhase: false,
+    bonusBookSource: null,
+    bookedPerRound: p.undoStack[0].bookedPerRound.map(arr => [...arr]),
+    undoStack: []
+  };
+  const handleHint = playerIdx => {
+    if (!hintsOn) return;
+    const p = players[playerIdx];
+    if (p.hint) {
+      updatePlayerFn(playerIdx, q => ({
+        ...roundStartOf(q),
+        selectedBankIndices: [],
+        hint: null
+      }));
+      return;
+    }
+    const start = roundStartOf(p);
+    const {
+      state,
+      bankList
+    } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(start) : start, bank.map(b => b.digit));
+    const cat = ['sequence', 'matching', 'ladder'].indexOf(start.chosenCategory);
+    const best = previewMainSolver(classicMode).bestBooking(state, cat, bankList, TOTAL_ROUNDS - round);
+    const placements = laxPlacement ? placementsToLax(start.grids, best.placements) : best.placements;
+    let ns = {
+      ...start,
+      selectedBankIndices: []
+    };
+    for (const pl of placements) ns = bookPlacement(ns, pl);
+    const note = best.placements.length === 0 ? 'Best play: book nothing' : round === TOTAL_ROUNDS - 1 ? best.winPct === 100 ? `Best play wins with ${best.pointsIfWinText}` : 'No booking reaches 100' : '';
+    const cells = placements.map(pl => `${pl.category}-${pl.row}-${pl.col}`);
+    updatePlayerFn(playerIdx, () => ({
+      ...ns,
+      hint: {
+        note,
+        cells
+      }
+    }));
+  };
   const handleUndo = playerIdx => {
     updatePlayerFn(playerIdx, p => {
       if (p.undoStack.length === 0) return p;
@@ -2965,6 +3490,7 @@ window.Simili = function Simili() {
         bonusBookPhase: phase === 'endgame-bonus' ? false : s.bonusBookPhase,
         bonusBookSource: phase === 'endgame-bonus' ? null : s.bonusBookSource,
         bookedPerRound: s.bookedPerRound.map(arr => [...arr]),
+        hint: null,
         undoStack: p.undoStack.slice(0, -1)
       };
     });
@@ -3096,6 +3622,7 @@ window.Simili = function Simili() {
         settings: {
           classicMode,
           laxPlacement,
+          hintsOn,
           quadBonus,
           twoPlayer,
           matchPlay
@@ -3698,6 +4225,7 @@ window.Simili = function Simili() {
     onToggleBankSelection: toggleBankSelection,
     onBookDigit: handleBookDigit,
     onUndo: handleUndo,
+    onHint: handleHint,
     onEndRound: handleEndRound,
     onUseBonusBook: handleUseBonusBook,
     onEndBonusBook: handleEndBonusBook,
@@ -3705,7 +4233,8 @@ window.Simili = function Simili() {
     twoPlayer: twoPlayer,
     redInk: redInk,
     winChances: round10WinChances ? round10WinChances[idx] : null,
-    quadBonus: quadBonus
+    quadBonus: quadBonus,
+    hintsOn: hintsOn
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
@@ -4409,6 +4938,15 @@ window.Simili = function Simili() {
     onChange: setLaxPlacement,
     leftLabel: "Strict Placement",
     rightLabel: "Lax Placement"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: hintsOn,
+    onChange: setHintsOn,
+    leftLabel: "Hints Off",
+    rightLabel: "Hints On"
   })))), showGameLogs && (() => {
     // Group game logs into pages:
     // - Match regular games: grouped by logGroupId, non-SD, up to 4 per page
@@ -4547,7 +5085,7 @@ window.Simili = function Simili() {
           fontSize: 11,
           opacity: 0.6
         }
-      }, ' ', "(", [log.settings.quadBonus ? 'Quad Bonus On' : 'Quad Bonus Off', log.settings.classicMode ? 'Classic' : 'Modern', log.settings.laxPlacement ? 'Lax Pl.' : 'Strict Pl.'].join(', '), ")"), log.abandoned ? ' (Abandoned)' : '', " \u2014 ", log.players.map((p, pi) => {
+      }, ' ', "(", [log.settings.quadBonus ? 'Quad Bonus On' : 'Quad Bonus Off', log.settings.classicMode ? 'Classic' : 'Modern', log.settings.laxPlacement ? 'Lax Pl.' : 'Strict Pl.', ...(log.settings.hintsOn ? ['Hints On'] : [])].join(', '), ")"), log.abandoned ? ' (Abandoned)' : '', " \u2014 ", log.players.map((p, pi) => {
         const label = log.settings.twoPlayer ? `P${pi + 1}: ` : '';
         return `${label}${p.score} pts${p.won ? ' ✓' : ' ✗'}`;
       }).join(' · ')), /*#__PURE__*/React.createElement("div", {
