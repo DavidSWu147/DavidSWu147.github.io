@@ -1155,7 +1155,8 @@
     return decimals ? s.slice(0, s.length - decimals) + '.' + s.slice(s.length - decimals) : s;
   }
   // Points if you win = (sum of winning scores) / (number of winning outcomes).
-  // That ratio usually does not terminate, so it is rounded (half up) to `decimals`.
+  // When every outcome wins it is exact at 3k decimals; otherwise it usually does not
+  // terminate, so it is rounded (half up). Trailing zeros are kept (102.440).
   function ratioDecimal(num, den, decimals) {
     const scaled = (BigInt(num) * 10n ** BigInt(decimals) * 2n + BigInt(den)) / (2n * BigInt(den));
     return exactDecimal(scaled.toString(), decimals);
@@ -1163,7 +1164,7 @@
   function describe(v, scale) {
     const k = Math.round(Math.log10(scale) / 3);
     const pct = num => (k === 0 ? String(100 * num) : exactDecimal(num, 3 * k - 2));
-    const dp = Math.max(0, 3 * k - 2);
+    const dp = 3 * k;
     return {
       winPct: (100 * v[0]) / scale,
       winPctExact: pct(v[0]),
