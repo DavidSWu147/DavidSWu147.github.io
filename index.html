@@ -1087,10 +1087,11 @@ function computeRound10WinChances(ps, existingBankDigits, classicMode, laxPlacem
       rolls
     } = solver.winningRolls(state, cat);
     const c = summary.categories[cat];
+    // average score when winning, left out when every win is exactly 100
     results[category] = {
       winPct: weight / 10,
       outs: computeOuts(rolls),
-      pointsIfWinText: c.pointsIfWin !== null ? c.pointsIfWinText : null
+      pointsIfWinText: c.pointsIfWin !== null && c.pointsIfWin !== 100 ? c.pointsIfWinText : null
     };
   });
   return results;
@@ -2152,7 +2153,7 @@ function PlayerSheet({
         opacity: 0.7,
         marginTop: 2
       }
-    }, "to win", !isZero && c.pointsIfWin !== null ? ` (${c.pointsIfWinText})` : ''));
+    }, "to win", !isZero && c.pointsIfWin !== null && c.pointsIfWin !== 100 ? ` (${c.pointsIfWinText})` : ''));
   })(), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (() => {
     const info = winChances[ps.chosenCategory];
     if (!info) return null;
