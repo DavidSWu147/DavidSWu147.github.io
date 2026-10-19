@@ -1080,14 +1080,17 @@ function computeRound10WinChances(ps, existingBankDigits, classicMode, laxPlacem
   } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(ps) : ps, existingBankDigits);
   const solver = previewMainSolver(classicMode);
   const results = {};
+  const summary = solver.analyzeRoundStart(state, 1);
   ['sequence', 'matching', 'ladder'].forEach((category, cat) => {
     const {
       weight,
       rolls
     } = solver.winningRolls(state, cat);
+    const c = summary.categories[cat];
     results[category] = {
       winPct: weight / 10,
-      outs: computeOuts(rolls)
+      outs: computeOuts(rolls),
+      pointsIfWinText: c.pointsIfWin !== null ? c.pointsIfWinText : null
     };
   });
   return results;
@@ -1690,12 +1693,30 @@ function placementsToLax(grids, placements) {
   }
   return out;
 }
+
+// Finished previews by position, so the same position is never solved twice (e.g. the
+// Round 9 preview of the booking you end Round 8 with, then the Round 9 odds).
+const previewResultCache = new Map();
 function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
   let cancelled = false;
   const workers = [];
   const cancel = () => {
     cancelled = true;
     workers.forEach(w => w.terminate());
+  };
+  const cacheKey = JSON.stringify([Array.from(state.rows), Array.from(state.bank), state.usedA, state.usedB, roundsLeft, !!classicMode]);
+  const cached = previewResultCache.get(cacheKey);
+  if (cached) {
+    setTimeout(() => {
+      if (!cancelled) onDone(cached);
+    }, 0);
+    return cancel;
+  }
+  const doneOuter = onDone;
+  onDone = r => {
+    if (previewResultCache.size >= 200) previewResultCache.clear();
+    previewResultCache.set(cacheKey, r);
+    doneOuter(r);
   };
   if (roundsLeft <= 1) {
     const r = previewMainSolver(classicMode).analyzeRoundStart(state, roundsLeft);
@@ -1986,7 +2007,8 @@ function PlayerSheet({
   redInk,
   winChances,
   quadBonus,
-  hintsOn
+  hintsOn,
+  round9Odds
 }) {
   const grids = ps.grids;
   const seqBonusI = hasSequenceBonusI(grids);
@@ -2089,7 +2111,55 @@ function PlayerSheet({
       marginTop: 4,
       opacity: 0.6
     }
-  }, ps.chosenCategory ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (() => {
+  }, ps.chosenCategory ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 2 && hintsOn && ps.chosenCategory && typeof SimiliSolver !== 'undefined' && (() => {
+    const c = round9Odds && round9Odds.result ? round9Odds.result.categories.find(x => x.category === ps.chosenCategory) : null;
+    if (!c) {
+      const pct = round9Odds ? Math.round((round9Odds.progress || 0) * 100) : 0;
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          textAlign: 'center',
+          marginTop: 6
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 16,
+          opacity: 0.35
+        }
+      }, "\u2026"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12,
+          opacity: 0.6,
+          marginTop: 2
+        }
+      }, `calculating win chances · ${pct}%`));
+    }
+    const isZero = c.winPct === 0,
+      isFull = c.winPct === 100;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: 'center',
+        marginTop: 6
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 16,
+        fontWeight: isZero || isFull ? 'bold' : 'normal',
+        color: isZero ? redInk : isFull ? '#27ae60' : '#2a2a2a'
+      }
+    }, isFull ? '100%' : isZero ? '0%' : c.winPctExact + '%'), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        opacity: 0.7,
+        marginTop: 2
+      }
+    }, "to win"), !isZero && c.pointsIfWin !== null && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        opacity: 0.7,
+        marginTop: 1
+      }
+    }, `${c.pointsIfWinText} if win`));
+  })(), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (() => {
     const info = winChances[ps.chosenCategory];
     if (!info) return null;
     const pct = info.winPct;
@@ -2113,7 +2183,13 @@ function PlayerSheet({
         opacity: 0.7,
         marginTop: 2
       }
-    }, !isZero && !isFull && info.outs ? info.outs + ' ' : '', "to win"));
+    }, !isZero && !isFull && info.outs ? info.outs + ' ' : '', "to win"), !isZero && info.pointsIfWinText && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        opacity: 0.7,
+        marginTop: 1
+      }
+    }, `${info.pointsIfWinText} if win`));
   })()), phase === 'choose' && !ps.chosenCategory && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 12
@@ -3163,7 +3239,10 @@ window.Simili = function Simili() {
   });
 
   // Round 10 win chances (computed at start of round 10)
-  const [round10WinChances, setRound10WinChances] = useState(null); // array per player: [{sequence:{winPct,outs}, matching:{...}, ladder:{...}}, ...]
+  const [round10WinChances, setRound10WinChances] = useState(null);
+  const [round9Start, setRound9Start] = useState(null); // solver positions at the start of Round 9, per player
+  const [round9Odds, setRound9Odds] = useState(null); // per player: { progress, result }
+  const round9JobRef = useRef(null); // array per player: [{sequence:{winPct,outs}, matching:{...}, ladder:{...}}, ...]
 
   // Player states
   const [players, setPlayers] = useState([createPlayerState()]);
@@ -3544,6 +3623,12 @@ window.Simili = function Simili() {
         chosenCategory: null,
         roundDone: false
       })));
+      // Remember the Round 9 starting positions (odds are computed only with Hints On)
+      if (nextRound === TOTAL_ROUNDS - 2 && typeof SimiliSolver !== 'undefined') {
+        const digits = bank.map(b => b.digit);
+        setRound9Start(players.map(p => SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(p) : p, digits).state));
+        setRound9Odds(null);
+      }
       // Compute Round 10 win chances
       if (nextRound === TOTAL_ROUNDS - 1) {
         const existingBankDigits = bank.map(b => b.digit);
@@ -3562,6 +3647,58 @@ window.Simili = function Simili() {
       setPhase('gameover');
     }
   }, [players, phase]);
+
+  // Round 9 win chances with Hints On: solve each player's starting position in the
+  // background (one player at a time, all workers), keeping results already found.
+  const round9OddsRef = useRef(null);
+  useEffect(() => {
+    round9OddsRef.current = round9Odds;
+  }, [round9Odds]);
+  useEffect(() => {
+    const stop = () => {
+      if (round9JobRef.current) round9JobRef.current();
+      round9JobRef.current = null;
+    };
+    if (!hintsOn || round !== TOTAL_ROUNDS - 2 || !round9Start) {
+      stop();
+      return;
+    }
+    let alive = true;
+    const setOne = (i, v) => setRound9Odds(o => {
+      const n = [...(o || [])];
+      n[i] = v;
+      return n;
+    });
+    const run = i => {
+      if (!alive || i >= round9Start.length) return;
+      const prev = round9OddsRef.current;
+      if (prev && prev[i] && prev[i].result) {
+        run(i + 1);
+        return;
+      }
+      setOne(i, {
+        progress: 0
+      });
+      round9JobRef.current = startPreviewJob(round9Start[i], 2, classicMode, p => {
+        if (alive) setOne(i, {
+          progress: p
+        });
+      }, r => {
+        round9JobRef.current = null;
+        if (!alive) return;
+        setOne(i, {
+          progress: 1,
+          result: r
+        });
+        run(i + 1);
+      });
+    };
+    run(0);
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [hintsOn, round, round9Start]);
   const handleUseBonusBook = (playerIdx, source) => {
     updatePlayer(playerIdx, {
       bonusBookPhase: true,
@@ -3968,6 +4105,8 @@ window.Simili = function Simili() {
     setSeedRolls(seed);
     setIsSeededGame(!!seed);
     setRound10WinChances(null);
+    setRound9Start(null);
+    setRound9Odds(null);
   };
   const handleMatchContinue = () => {
     setMatchGameNum(prev => prev + 1);
@@ -4001,6 +4140,8 @@ window.Simili = function Simili() {
     setMatchPhase('playing');
     setMatchAbandoned(false);
     setRound10WinChances(null);
+    setRound9Start(null);
+    setRound9Odds(null);
     if (matchPlay) {
       matchCounterRef.current++;
       logGroupIdRef.current++;
@@ -4234,7 +4375,8 @@ window.Simili = function Simili() {
     redInk: redInk,
     winChances: round10WinChances ? round10WinChances[idx] : null,
     quadBonus: quadBonus,
-    hintsOn: hintsOn
+    hintsOn: hintsOn,
+    round9Odds: round9Odds ? round9Odds[idx] : null
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
