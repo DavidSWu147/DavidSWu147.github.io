@@ -20,6 +20,7 @@
   const SEQ = 0, MAT = 1, LAD = 2;
   const CAT_NAMES = ['sequence', 'matching', 'ladder'];
   const ROWS = 5;
+  const W_A = ['A'], W_B = ['B'], W_AB = ['A', 'B'];
 
   // ---------- row codes ----------
   function enc(c) { return ((c[0] * 11 + c[1]) * 11 + c[2]) * 11 + c[3]; }
@@ -82,6 +83,9 @@
   const LEGAL = [new Uint8Array(NCODES), new Uint8Array(NCODES), new Uint8Array(NCODES)];
   const SCORE = [new Int8Array(NCODES), new Int8Array(NCODES), new Int8Array(NCODES)];
   const CANON = new Uint16Array(NCODES);   // min(code, mirrored code): rules are mirror-symmetric
+  // Ladder rows are also unchanged by swapping the two cells of a pair (34_4 = 344_ = 4_43):
+  // legality and scoring only look at each pair's digit(s). So Ladder gets a finer class.
+  const CANON_LAD = new Uint16Array(NCODES);
   const FILLED = new Uint8Array(NCODES);
   for (let code = 0; code < NCODES; code++) {
     const c = dec(code), n = toNull(c);
@@ -93,8 +97,74 @@
     SCORE[MAT][code] = scoreMat(n);
     SCORE[LAD][code] = scoreLad(n);
     CANON[code] = Math.min(code, enc([c[3], c[2], c[1], c[0]]));
+    let m = NCODES;
+    for (const [a, b] of [[c[0], c[1]], [c[1], c[0]]]) for (const [x, y] of [[c[2], c[3]], [c[3], c[2]]]) {
+      m = Math.min(m, enc([a, b, x, y]), enc([y, x, b, a]));
+    }
+    CANON_LAD[code] = m;
   }
   const EMPTY_ROW = enc([E, E, E, E]);
+
+  // ---------- rows that play the same ----------
+  // Two rows of a category are interchangeable if each can answer every digit the other
+  // takes with the same digit and stay at least as good (and score at least as much
+  // now). Then any plan for one works for the other, so positions that differ only by
+  // such rows have the same value, and caches can share them. Examples: mirrored rows
+  // (123_ = _321); Matching 1___ = _1__ and 11__ = _11_ = 1_1_ (but not 1__1, which
+  // needs both remaining cells for anything); Ladder 1_2_ = _12_ = 2__1 and so on.
+  // Rows that can never score more are interchangeable with any row of the same score.
+  // Computed level by level from full rows down (each placement adds a cell).
+  function rowClasses(cat) {
+    const legal = [], moves = new Map(), best = new Map(), level = [[], [], [], [], []];
+    for (let c = 0; c < NCODES; c++) if (LEGAL[cat][c]) legal.push(c);
+    for (const c of legal) {
+      const cells = dec(c), mv = [];
+      for (let p = 0; p < 4; p++) if (cells[p] === E) {
+        for (let d = 0; d <= 9; d++) { cells[p] = d; const n = enc(cells); if (LEGAL[cat][n]) mv.push(d, n); }
+        cells[p] = E;
+      }
+      moves.set(c, mv);
+      level[4 - dec(c).filter(x => x === E).length].push(c);
+    }
+    for (let k = 4; k >= 0; k--) for (const c of level[k]) {
+      let b = SCORE[cat][c];
+      const mv = moves.get(c);
+      for (let j = 1; j < mv.length; j += 2) b = Math.max(b, best.get(mv[j]));
+      best.set(c, b);
+    }
+    const dead = c => best.get(c) === SCORE[cat][c];
+    const le = new Map();
+    const LE = (a, b) => {
+      if (a === b) return true;
+      const v = le.get(a * NCODES + b);
+      if (v !== undefined) return v;
+      return dead(a) && SCORE[cat][a] <= SCORE[cat][b];   // wasted digits can simply be kept
+    };
+    // candidates: rows with the same number of filled cells (digits may differ: 123_ and
+    // _567 both just wait for a 4)
+    const groupsAt = k => [level[k]];
+    for (let k = 4; k >= 0; k--) for (const g of groupsAt(k)) for (const a of g) for (const b of g) {
+      if (a === b) continue;
+      let ok = SCORE[cat][a] <= SCORE[cat][b];
+      const ma = moves.get(a), mb = moves.get(b);
+      for (let i = 0; ok && i < ma.length; i += 2) {
+        let found = false;
+        for (let j = 0; j < mb.length; j += 2) if (mb[j] === ma[i] && LE(ma[i + 1], mb[j + 1])) { found = true; break; }
+        if (!found) ok = false;
+      }
+      le.set(a * NCODES + b, ok);
+    }
+    const cls = new Uint16Array(NCODES);
+    for (let c = 0; c < NCODES; c++) cls[c] = c;
+    for (let k = 0; k <= 4; k++) for (const g of groupsAt(k)) for (const a of g) for (const b of g) {
+      if (b < cls[a] && LE(a, b) && LE(b, a)) cls[a] = b;
+    }
+    const deadRep = new Map();
+    for (const c of legal) if (dead(c)) { const sc = SCORE[cat][c]; if (!deadRep.has(sc) || c < deadRep.get(sc)) deadRep.set(sc, c); }
+    for (const c of legal) if (dead(c)) cls[c] = deadRep.get(SCORE[cat][c]);
+    return cls;
+  }
+  const CLASS = [rowClasses(SEQ), rowClasses(MAT), rowClasses(LAD)];
 
   // Extensions of a row: every legal way to fill a non-empty subset of its empty cells.
   // ext = { code, n, need: Int8Array(10), cells: [[pos, digit], ...], gain }
@@ -190,7 +260,8 @@
     const a = new Array(26);
     for (let cat = 0; cat < 3; cat++) {
       const t = [];
-      for (let i = 0; i < ROWS; i++) t.push(CANON[rows[cat * ROWS + i]]);
+      const CN = CLASS[cat];
+      for (let i = 0; i < ROWS; i++) t.push(CN[rows[cat * ROWS + i]]);
       t.sort((x, y) => x - y);
       for (let i = 0; i < ROWS; i++) a[cat * ROWS + i] = t[i];
     }
@@ -210,7 +281,11 @@
   // cb(rows, bank, usedA, usedB, nMain, placements) ; placements built only if `track`.
   // `wild` (final round only): allow up to `wild` digits not in the bank; cb's 8th
   // argument is then the missing multiset code (see fast final round below).
-  Solver.prototype.forEachBooking = function (st, cat, bank, final, track, cb, wild) {
+  // `lastCb(missKey, score, quad)` (last round, no tracking): optional fast path for the
+  // final free book, reporting the end score directly instead of calling cb per option.
+  // `unlockOnly` (last round, Sequence): only main bookings that unlock a free book, and
+  // only their free-book continuations (the caller covers everything else).
+  Solver.prototype.forEachBooking = function (st, cat, bank, final, track, cb, wild, lastCb, unlockOnly) {
     wild = wild | 0;
     const classic = this.classic;
     const rows = Int16Array.from(st.rows);
@@ -219,26 +294,28 @@
     let missN = 0;
     const missKey = () => {
       if (!wild) return 0;
-      const t = [];
-      for (let d = 0; d < 10; d++) for (let k = 0; k < miss[d]; k++) t.push(d);
-      while (t.length < 3) t.push(E);
-      return (t[0] * 11 + t[1]) * 11 + t[2];
+      let m = 0, k = 0;
+      for (let d = 0; d < 10; d++) for (let c = miss[d]; c > 0; c--) { m = m * 11 + d; k++; }
+      for (; k < 3; k++) m = m * 11 + E;
+      return m;
     };
     // take digits from the bank, else from wildcards; returns false if impossible
-    const take = need => {
+    const usedBuf = wild ? new Int8Array(ROWS * 10) : null;   // one slot per row (no allocation per booking)
+    const take = (need, slot) => {
       let add = 0;
       for (let d = 0; d < 10; d++) if (need[d] > bk[d]) add += need[d] - bk[d];
-      if (missN + add > wild) return null;
-      const used = new Int8Array(10);
+      if (missN + add > wild) return false;
+      const o = slot * 10;
       for (let d = 0; d < 10; d++) {
-        const fromBank = Math.min(need[d], bk[d]);
-        used[d] = fromBank; bk[d] -= fromBank; miss[d] += need[d] - fromBank;
+        const fromBank = need[d] < bk[d] ? need[d] : bk[d];
+        usedBuf[o + d] = fromBank; bk[d] -= fromBank; miss[d] += need[d] - fromBank;
       }
       missN += add;
-      return used;
+      return true;
     };
-    const give = (need, used) => {
-      for (let d = 0; d < 10; d++) { bk[d] += used[d]; miss[d] -= need[d] - used[d]; missN -= need[d] - used[d]; }
+    const give = (need, slot) => {
+      const o = slot * 10;
+      for (let d = 0; d < 10; d++) { const u = usedBuf[o + d]; bk[d] += u; miss[d] -= need[d] - u; missN -= need[d] - u; }
     };
     const [n10, n15] = seqCounts(rows);
     const maxBook = cat === SEQ && n10 >= 1 ? 4 : 3;
@@ -258,44 +335,94 @@
     }
     const self = this;
 
-    function bonusPhase(nMain) {
-      // Option: stop here.
-      cb(rows, bk, st.usedA, st.usedB, nMain, placements, missKey());
-      if (st.usedA === 0 || (!classic && st.usedB === 0)) tryBonus(st.usedA, st.usedB, nMain, 0);
+    function bonusPhase(nMain, setups) {
+      if (unlockOnly) {
+        let c10 = 0, c15 = 0;
+        for (let i = 0; i < ROWS; i++) { const s = SCORE[SEQ][rows[i]]; if (s >= 10) c10++; if (s >= 15) c15++; }
+        if ((st.usedA === 0 && c10 >= 5) || (!classic && st.usedB === 0 && c15 >= 4)) tryBonus(st.usedA, st.usedB, nMain, 0, -1);
+        return;
+      }
+      if (setups > 0) {
+        // last round with non-scoring set-ups: only useful if a free book is now at hand
+        // (stopping here is never better than not making the set-ups at all)
+        let c10 = 0, c15 = 0;
+        for (let i = 0; i < ROWS; i++) { const s = SCORE[SEQ][rows[i]]; if (s >= 10) c10++; if (s >= 15) c15++; }
+        if (!((st.usedA === 0 && c10 >= 5) || (!classic && st.usedB === 0 && c15 >= 4))) return;
+      } else {
+        // Option: stop here.
+        cb(rows, bk, st.usedA, st.usedB, nMain, placements, missKey());
+      }
+      if (st.usedA === 0 || (!classic && st.usedB === 0)) tryBonus(st.usedA, st.usedB, nMain, 0, -1);
     }
-    // Use one free book (A or B), then possibly the other.
-    function tryBonus(uA, uB, nMain, depth) {
+    // Use one free book (A or B), then possibly the other. In the last round a free
+    // book that scores nothing is only worth it if the other free book then finishes
+    // that same row (`onlyIdx`); and when both are already unlocked, which one goes
+    // first changes nothing, so only A-then-B is tried.
+    function tryBonus(uA, uB, nMain, depth, onlyIdx) {
       if (depth >= 2) return;
       let c10 = 0, c15 = 0;
       for (let i = 0; i < ROWS; i++) { const s = SCORE[SEQ][rows[i]]; if (s >= 10) c10++; if (s >= 15) c15++; }
       const okA = uA === 0 && c10 >= 5, okB = !classic && uB === 0 && c15 >= 4;
       if (!okA && !okB) return;
-      const which = okA && okB ? ['A', 'B'] : okA ? ['A'] : ['B'];
-      for (const w of which) {
+      const which = okA && okB ? (final ? W_A : W_AB) : okA ? W_A : W_B;
+      // the second free book of the last round: score each option without recursing
+      const fast = depth === 1 && final && !track && lastCb;
+      let sNo = 0, n15 = 0, m20 = 0, l20 = 0, q = false;
+      if (fast) {
+        for (let i = 0; i < ROWS; i++) {
+          const a = SCORE[SEQ][rows[i]], m = SCORE[MAT][rows[ROWS + i]], l = SCORE[LAD][rows[2 * ROWS + i]];
+          sNo += a + m + l;
+          if (a >= 15) n15++; if (m >= 20) { m20++; q = true; } if (l >= 20) l20++;
+        }
+      }
+      for (let wi = 0; wi < which.length; wi++) {
+        const w = which[wi];
         const otherUsed = w === 'A' ? uB : uA;
-        const cats = otherUsed === 2 ? [SEQ] : [SEQ, MAT, LAD];
-        for (const c of cats) {
+        // can the other free book still follow? (a non-scoring digit unlocks nothing)
+        const otherReady = w === 'A' ? (!classic && uB === 0 && c15 >= 4) : (uA === 0 && c10 >= 5);
+        const nCats = otherUsed === 2 ? 1 : 3;
+        for (let c = 0; c < nCats; c++) {
           for (let i = 0; i < ROWS; i++) {
             const idx = c * ROWS + i, old = rows[idx];
+            if (onlyIdx >= 0 && idx !== onlyIdx) continue;
             if (FILLED[old] === 4) continue;
             // identical rows: only try the first one
             let dup = false;
             for (let j = 0; j < i; j++) if (rows[c * ROWS + j] === old) { dup = true; break; }
             if (dup) continue;
             const L = getExt(c, old);
-            // the first free book may set up a row for the second one
-            const singles = final && depth > 0 ? L.singlesImproving : L.singles;
+            const singles = !final || (depth === 0 && otherReady) ? L.singles : L.singlesImproving;
+            if (fast) {
+              const full = c === SEQ ? 15 : 20, wasFull = SCORE[c][old] >= full;
+              for (const e of singles) {
+                const d = e.cells[0][1];
+                let key;
+                if (bk[d] > 0) key = missKey();
+                else if (missN < wild) { miss[d]++; key = missKey(); miss[d]--; }
+                else continue;
+                const nowFull = !wasFull && SCORE[c][e.code] >= full;
+                const a = n15 + (nowFull && c === SEQ ? 1 : 0), m = m20 + (nowFull && c === MAT ? 1 : 0), l = l20 + (nowFull && c === LAD ? 1 : 0);
+                const b3 = a >= 5 || (!classic && (m === ROWS || l === ROWS));
+                lastCb(key, sNo + e.gain + (b3 ? 5 : 0), q || (c === MAT && nowFull));
+              }
+              continue;
+            }
             for (const e of singles) {
               const d = e.cells[0][1];
-              const used = take(e.need);
-              if (!used) continue;
+              // one digit: from the bank, else a wildcard
+              let fromBank;
+              if (bk[d] > 0) { bk[d]--; fromBank = true; }
+              else if (missN < wild) { miss[d]++; missN++; fromBank = false; }
+              else continue;
               rows[idx] = e.code;
               if (track) placements.push({ cat: c, row: i, col: e.cells[0][0], digit: d, bonus: w });
               const nuA = w === 'A' ? (c === SEQ ? 1 : 2) : uA, nuB = w === 'B' ? (c === SEQ ? 1 : 2) : uB;
-              cb(rows, bk, nuA, nuB, nMain, placements, missKey());
-              tryBonus(nuA, nuB, nMain, depth + 1);
+              const scoring = e.gain > 0;
+              if (!final || scoring) cb(rows, bk, nuA, nuB, nMain, placements, missKey());
+              tryBonus(nuA, nuB, nMain, depth + 1, final && !scoring ? idx : -1);
               if (track) placements.pop();
-              rows[idx] = old; give(e.need, used);
+              rows[idx] = old;
+              if (fromBank) bk[d]++; else { miss[d]--; missN--; }
             }
           }
         }
@@ -306,8 +433,33 @@
     // after the previous copy's, and "nothing" (NONE) counts as the last option, so
     // the upper of two identical rows is the one that gets booked.
     const NONE = 1 << 30;
+    // unlockOnly: can the rows still reach an unlock with `budget` digits from row i on?
+    const canUnlock = (i, budget) => {
+      if (st.usedA === 0) {
+        let ok = true, need = 0;
+        for (let j = 0; j < ROWS && ok; j++) {
+          const n = needTo(rows[base + j], 10);
+          if (j < i) { if (n > 0) ok = false; } else need += n;
+        }
+        if (ok && need <= budget) return true;
+      }
+      if (!classic && st.usedB === 0) {
+        let have = 0;
+        const needs = [];
+        for (let j = 0; j < ROWS; j++) {
+          const n = needTo(rows[base + j], 15);
+          if (n === 0) have++; else if (j >= i) needs.push(n);
+        }
+        needs.sort((x, y) => x - y);
+        let left = budget;
+        for (const n of needs) { if (have >= 4 || n > left) break; left -= n; have++; }
+        if (have >= 4) return true;
+      }
+      return false;
+    };
     (function rec(i, budget, nMain, setups) {
-      if (i === ROWS) { bonusPhase(nMain); return; }
+      if (i === ROWS) { bonusPhase(nMain, setups); return; }
+      if (unlockOnly && !canUnlock(i, budget)) return;
       const idx = base + i, old = rows[idx];
       const same = i > 0 && st.rows[idx] === st.rows[idx - 1];
       const minChoice = same ? choice[i - 1] : 0;
@@ -327,14 +479,14 @@
           for (let d = 0; d < 10; d++) if (need[d] > bk[d]) { ok = false; break; }
           if (!ok) continue;
           for (let d = 0; d < 10; d++) bk[d] -= need[d];
-        } else if (!(used = take(need))) continue;
+        } else if (!take(need, i)) continue;
         rows[idx] = x.code; choice[i] = e;
         if (track) for (const [p, d] of x.cells) placements.push({ cat, row: i, col: p, digit: d, bonus: null });
         rec(i + 1, budget - x.n, nMain + x.n, setups + setup);
         if (track) placements.length -= x.n;
         rows[idx] = old;
         if (!wild) for (let d = 0; d < 10; d++) bk[d] += need[d];
-        else give(need, used);
+        else give(need, i);
       }
       choice[i] = NONE;
     })(0, maxBook, 0, 0);
@@ -412,7 +564,8 @@
     const bank = new Int8Array(10);
     for (let d = 0; d < 10; d++) bank[d] = Math.min(st.bank[d], cap[d], budget);
     const watchA = !ignoreUnlock && cat === SEQ && st.usedA === 0, watchB = !ignoreUnlock && cat === SEQ && !this.classic && st.usedB === 0;
-    const sorted = rc.map(c => CANON[c]).sort((a, b) => a - b);
+    const CN = CLASS[cat];
+    const sorted = rc.map(c => CN[c]).sort((a, b) => a - b);
     const key = String.fromCharCode(cat, budget, (bonus3Before ? 1 : 0) + (watchA ? 2 : 0) + (watchB ? 4 : 0), ...sorted, ...bank);
     let tab = this.tables.get(key);
     if (tab !== undefined) return tab;
@@ -421,6 +574,30 @@
     if (this.tables.size >= this.maxTables) this.tables.clear();
     this.tables.set(key, tab);
     return tab;
+  };
+
+  // Best gain per missing multiset for main bookings in `cat` alone (no free books),
+  // cached like finalTable.
+  Solver.prototype.plainGains = function (st, cat, bonus3Before) {
+    const rows = st.rows, base = cat * ROWS, rc = [];
+    for (let i = 0; i < ROWS; i++) rc.push(rows[base + i]);
+    const [n10] = seqCounts(rows);
+    const budget = cat === SEQ && n10 >= 1 ? 4 : 3;
+    const bank = new Int8Array(10);
+    for (let i = 0; i < ROWS; i++) { const m = maxNeed(cat, rc[i]); for (let d = 0; d < 10; d++) bank[d] += m[d]; }
+    for (let d = 0; d < 10; d++) bank[d] = Math.min(st.bank[d], bank[d], budget);
+    const CN = CLASS[cat];
+    const sorted = rc.map(c => CN[c]).sort((a, b) => a - b);
+    const key = String.fromCharCode(cat, budget, bonus3Before ? 1 : 0, ...sorted, ...bank);
+    if (!this.gainTables) this.gainTables = new Map();
+    let g = this.gainTables.get(key);
+    if (g === undefined) {
+      this.buildTable(cat, rc, budget, bank, bonus3Before, false, false);
+      g = TB_bestGain.slice();
+      if (this.gainTables.size >= this.maxTables) this.gainTables.clear();
+      this.gainTables.set(key, g);
+    }
+    return g;
   };
 
   // Build one final-round table: rows `rc` (5 codes) of category `cat`, booking limit
@@ -524,14 +701,74 @@
   // Whole-position table (used when a free book may be in play): best encoded
   // terminal value per missing multiset. Encoding keeps lexicographic order.
   const encV = (win, s, q) => (win ? 1000 + 2 * s + q : q);
+  // The result only depends on part of the position, so it is cached by that part:
+  //  - the booked category and Sequence (free books can add two digits there, and
+  //    unlock each other) in full;
+  //  - any other category gets at most one free digit (a second free book must go into
+  //    Sequence if the first did not), so only its rows that one digit can improve
+  //    matter, plus how many rows are full (Bonus III) and whether it has a Quad.
+  // Results are stored relative to the current score, which makes them shareable:
+  // gq[m] = best 2*gain + quad, aq[m] = best quad, for missing multiset m.
   Solver.prototype.fullFinalTable = function (st, cat) {
+    const classic = this.classic, rows = st.rows;
+    const parts = [cat, st.usedA * 3 + st.usedB];
+    for (let c = 0; c < 3; c++) {
+      const CN = CLASS[c];
+      const t = [];
+      if (c === cat || c === SEQ) {
+        for (let i = 0; i < ROWS; i++) t.push(CN[rows[c * ROWS + i]]);
+      } else {
+        let full = 0, quad = 0;
+        for (let i = 0; i < ROWS; i++) {
+          const code = rows[c * ROWS + i];
+          if (SCORE[c][code] >= 20) { full++; if (c === MAT) quad = 1; }
+          if (bestSingleGain(c, code) > 0) t.push(CN[code]);
+        }
+        parts.push(100 + full * 2 + quad);
+      }
+      t.sort((a, b) => a - b);
+      parts.push(t.length, ...t);
+    }
+    for (let d = 0; d < 10; d++) parts.push(Math.min(st.bank[d], 6));
+    const key = String.fromCharCode(...parts);
+    if (!this.fullCache) this.fullCache = new Map();
+    let ent = this.fullCache.get(key);
+    const S0 = terminalScore(rows, classic);
+    if (ent === undefined) {
+      this.fullTablesBuilt++;
+      const gq = new Int16Array(MISS_N).fill(-1), aq = new Int8Array(MISS_N);
+      const q0 = hasQuad(rows) ? 1 : 0;
+      // Sequence with no free book at hand yet: bookings that unlock none are covered by
+      // the plain table (also a lower bound for those that do), so only the unlocking
+      // ones need the slow whole-position search.
+      let unlockOnly = false;
+      if (cat === SEQ) {
+        const [n10, n15] = seqCounts(rows);
+        const freeNow = (st.usedA === 0 && n10 >= 5) || (!classic && st.usedB === 0 && n15 >= 4);
+        if (!freeNow) {
+          unlockOnly = true;
+          const g = this.plainGains(st, SEQ, bonus3Of(rows, classic));
+          for (let m = 0; m < MISS_N; m++) if (g[m] >= 0) { gq[m] = 2 * g[m] + q0; aq[m] = q0; }
+        }
+      }
+      const rec = (m, s, q) => {
+        const v = 2 * (s - S0) + q;
+        if (v > gq[m]) gq[m] = v;
+        if (q > aq[m]) aq[m] = q;
+      };
+      this.forEachBooking(st, cat, st.bank, true, false,
+        (r, bk, uA, uB, n, pl, m) => rec(m, terminalScore(r, classic), hasQuad(r) ? 1 : 0), 3,
+        (m, s, q) => rec(m, s, q ? 1 : 0), unlockOnly);
+      ent = { gq, aq };
+      if (this.fullCache.size >= (this.maxTables >> 2)) this.fullCache.clear();
+      this.fullCache.set(key, ent);
+    }
     const best = new Int16Array(MISS_N).fill(-1);
-    const classic = this.classic;
-    this.forEachBooking(st, cat, st.bank, true, false, (rows, bk, uA, uB, n, pl, m) => {
-      const s = terminalScore(rows, classic);
-      const v = encV(s >= 100, s, hasQuad(rows) ? 1 : 0);
-      if (v > best[m]) best[m] = v;
-    }, 3);
+    const { gq, aq } = ent;
+    for (let m = 0; m < MISS_N; m++) {
+      if (gq[m] < 0) continue;
+      best[m] = S0 + (gq[m] >> 1) >= 100 ? 1000 + 2 * S0 + gq[m] : aq[m];
+    }
     return best;
   };
 
@@ -717,7 +954,7 @@
     // canonical rows, sorted (insertion sort of five)
     const x = this.fx || (this.fx = new Int32Array(ROWS));
     for (let i = 0; i < ROWS; i++) {
-      const v = CANON[rows[base + i]];
+      const v = CLASS[c][rows[base + i]];
       let j = i - 1;
       while (j >= 0 && x[j] > v) { x[j + 1] = x[j]; j--; }
       x[j + 1] = v;
@@ -1191,7 +1428,12 @@
     };
   }
 
-  const api = { Solver, fromGame, summarize, makeState, enc, dec, E, SEQ, MAT, LAD, CAT_NAMES, ROLLS, SCORE, LEGAL, getExt, terminalScore, hasQuad };
+  // Cache key for a position: equal for positions that only differ by row order within
+  // a category, mirrored rows, or (Ladder) the two cells of a pair swapped.
+  function positionKey(st, roundsLeft, classic) {
+    return (classic ? 'c' : 'm') + roundsLeft + Solver.prototype.key.call(null, st.rows, st.bank, st.usedA, st.usedB, roundsLeft);
+  }
+  const api = { Solver, fromGame, summarize, makeState, enc, dec, E, SEQ, MAT, LAD, CAT_NAMES, ROLLS, SCORE, LEGAL, CANON, CANON_LAD, CLASS, getExt, terminalScore, hasQuad, positionKey };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SimiliSolver = api;
 })(typeof self !== 'undefined' ? self : this);
