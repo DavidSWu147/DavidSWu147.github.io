@@ -2152,13 +2152,7 @@ function PlayerSheet({
         opacity: 0.7,
         marginTop: 2
       }
-    }, "to win"), !isZero && c.pointsIfWin !== null && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        opacity: 0.7,
-        marginTop: 1
-      }
-    }, `${c.pointsIfWinText} if win`));
+    }, "to win", !isZero && c.pointsIfWin !== null ? ` (${c.pointsIfWinText})` : ''));
   })(), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (() => {
     const info = winChances[ps.chosenCategory];
     if (!info) return null;
@@ -2183,13 +2177,7 @@ function PlayerSheet({
         opacity: 0.7,
         marginTop: 2
       }
-    }, !isZero && !isFull && info.outs ? info.outs + ' ' : '', "to win"), !isZero && info.pointsIfWinText && /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        opacity: 0.7,
-        marginTop: 1
-      }
-    }, `${info.pointsIfWinText} if win`));
+    }, !isZero && !isFull && info.outs ? info.outs + ' ' : '', "to win", !isZero && info.pointsIfWinText ? ` (${info.pointsIfWinText})` : ''));
   })()), phase === 'choose' && !ps.chosenCategory && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 12
