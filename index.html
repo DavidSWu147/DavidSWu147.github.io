@@ -1696,7 +1696,8 @@ function placementsToLax(grids, placements) {
 }
 
 // Finished previews by position, so the same position is never solved twice (e.g. the
-// Round 9 preview of the booking you end Round 8 with, then the Round 9 odds).
+// Round 9 preview of the booking you end Round 8 with, then the Round 9 odds, or two
+// bookings that give functionally identical boards).
 const previewResultCache = new Map();
 function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
   let cancelled = false;
@@ -1705,7 +1706,9 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
     cancelled = true;
     workers.forEach(w => w.terminate());
   };
-  const cacheKey = JSON.stringify([Array.from(state.rows), Array.from(state.bank), state.usedA, state.usedB, roundsLeft, !!classicMode]);
+  // functionally identical boards (rows in any order, interchangeable rows such as 123_/_321,
+  // Matching 11__/_11_, Ladder 1_2_/_12_) share a result
+  const cacheKey = SimiliSolver.positionKey ? SimiliSolver.positionKey(state, roundsLeft, !!classicMode) : JSON.stringify([Array.from(state.rows), Array.from(state.bank), state.usedA, state.usedB, roundsLeft, !!classicMode]);
   const cached = previewResultCache.get(cacheKey);
   if (cached) {
     setTimeout(() => {
