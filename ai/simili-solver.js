@@ -953,6 +953,13 @@
   }
 
   Solver.prototype.finalValue = function (st) {
+    const vs = this.finalCategoryValues(st);
+    let best = vs[0];
+    for (let c = 1; c < 3; c++) if (cmp(vs[c], best) > 0) best = vs[c];
+    return best;
+  };
+  // Start of round 10: value of each category.
+  Solver.prototype.finalCategoryValues = function (st) {
     const rows = st.rows;
     const S0 = terminalScore(rows, this.classic);
     const q0 = hasQuad(rows);
@@ -964,20 +971,27 @@
       if (SCORE[LAD][rows[2 * ROWS + i]] >= 20) l20++;
     }
     const b3 = n15 >= 5 || (!this.classic && (m20 === ROWS || l20 === ROWS));
-    let best = null;
+    const out = [];
     for (let cat = 0; cat < 3; cat++) {
       const tab = bonusMaybeUsable(st, this.classic, cat) ? null : this.finalTable(st, cat, b3);
-      let v;
       if (tab) {
-        v = evalTab(tab, S0, q0);
+        out.push(evalTab(tab, S0, q0));
       } else {
         this.fullTablesBuilt++;
-        const full = this.fullFinalTable(st, cat);
-        v = aggregateFull(full);
+        out.push(aggregateFull(this.fullFinalTable(st, cat)));
       }
-      if (best === null || cmp(v, best) > 0) best = v;
     }
-    return best;
+    return out;
+  };
+  // Tie-break data for a booking made before round 10: the next round's second-best
+  // and worst categories, as [win, points-if-win sum, win, points-if-win sum].
+  // (Categories equal on win and points if win give the same entries whichever is
+  // ranked first, so display-mode values are enough.)
+  Solver.prototype.altValues = function (st, roundsLeft) {
+    const vs = roundsLeft === 1 && this.fastFinal ? this.finalCategoryValues(st)
+      : [0, 1, 2].map(c => this.categoryValue(st, c, roundsLeft));
+    vs.sort((a, b) => cmp3(b, a));
+    return [vs[1][0], vs[1][1], vs[2][0], vs[2][1]];
   };
 
   // Value of a position at the START of a round with `roundsLeft` rounds to play.
@@ -1332,11 +1346,17 @@
     const bank = new Int8Array(10);
     for (const b of bankList) if (!b.used) bank[b.digit]++;
     let best = null;
+    // equal values and end-of-round score: compare the next round's other categories
+    const fill = c => { if (!c.alt) c.alt = this.altValues(c.st, roundsLeft - 1); };
     this.forEachBooking(st, cat, bank, final, true, (rows, bk, uA, uB, nMain, placements) => {
-      const v = final ? this.terminal(rows) : this.value(makeState(rows, bk, uA, uB), roundsLeft - 1);
+      const next = final ? null : makeState(rows, bk, uA, uB);
+      const v = final ? this.terminal(rows) : this.value(next, roundsLeft - 1);
       const cand = candidateOf(rows, placements, bankList, this.classic);
-      cand.v = v;
-      if (best === null || better(cand, best)) best = cand;
+      cand.v = v; cand.st = next;
+      if (best === null) { best = cand; return; }
+      const c = cmp(v, best.v);
+      if (c === 0 && !final && cand.now === best.now) { fill(cand); fill(best); }
+      if (c > 0 || (c === 0 && tieBetter(cand, best))) best = cand;
     });
     return {
       placements: best.placements.map(p => ({ ...p, category: CAT_NAMES[p.cat] })),
@@ -1563,20 +1583,32 @@
       if (this.trace) this.trace({ index: solved, of: groups.length, bound: g.bound.ub, value: v, best: best3, rolls: (this.rollsSolved || 0) - r0, ms: Date.now() - tc });
     }
     this.exactLoss = exactSaved;
-    // Phase 2: exact values (points if lost too) for the tied ones, then the booking tie-breaks.
-    // Same branch and bound as before, now on all four values, among the tied ones only.
-    let best = null;
+    // Phase 2: exact values (points if lost too) for the tied ones, then the end-of-round
+    // score. Same branch and bound as before, now on all four values, among the tied ones only.
+    let best = null, ties = [];
     for (const g of tied) {
-      const beats = v => best === null || cmp(v, best.v) > 0 || (cmp(v, best.v) === 0 && tieBetter(g.cand, best.cand));
+      const beats = v => best === null || cmp(v, best.v) > 0 || (cmp(v, best.v) === 0 && g.cand.now >= best.cand.now);
       if (!beats(g.bound.ub)) continue;
       const v = this.valueWithCutoff(g.state, g.bound, beats);
       if (v === undefined) return out({ tied: tied.length });
-      if (v !== null) best = { v, cand: g.cand };
+      if (v === null) continue;
+      if (best === null || cmp(v, best.v) > 0 || g.cand.now > best.cand.now) { best = { v, cand: g.cand }; ties = [g]; } else ties.push(g);
+    }
+    // Phase 3: still equal, so the round-9 categories other than the best one decide
+    // (then the rest of the booking tie-breaks)
+    if (ties.length > 1) {
+      this.exactLoss = false;
+      for (const g of ties) {
+        g.cand.alt = this.altValues(g.state, 2);
+        if (this.deadline && Date.now() > this.deadline) return out({ tied: tied.length });
+      }
+      this.exactLoss = exactSaved;
+      for (const g of ties) if (tieBetter(g.cand, best.cand)) best = { v: best.v, cand: g.cand };
     }
     return {
       placements: best.cand.placements.map(p => ({ ...p, category: CAT_NAMES[p.cat] })),
       value: best.v, ...describe(best.v, 1e6),
-      stats: { positions: groups.length, solved, tied: tied.length, boundMs: tBound, ms: Date.now() - t0 },
+      stats: { positions: groups.length, solved, tied: tied.length, ties: ties.length, boundMs: tBound, ms: Date.now() - t0 },
     };
   };
 
@@ -1593,23 +1625,31 @@
     const cellOrder = placements.map(p => p.cat * 100 + p.row * 10 + p.col).sort((x, y) => x - y);
     let ascending = 0;
     for (const r of new Set(placements.filter(p => p.cat === SEQ).map(p => p.row))) if (isAscendingRow(rows[r])) ascending++;
-    return { v: null, now: terminalScore(rows, classic), n, idxs, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
+    const nB = placements.filter(p => p.bonus === 'B').length, nA = placements.filter(p => p.bonus === 'A').length;
+    return { v: null, now: terminalScore(rows, classic), alt: null, n, idxs, nB, nA, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
   }
   function better(a, b) {
     const c = cmp(a.v, b.v);
     if (c !== 0) return c > 0;
     return tieBetter(a, b);
   }
-  // tie-breaks 5-9 only (equal values)
+  // tie-breaks 5-11 only (equal values; item 6 needs .alt filled in on both, see README)
   function tieBetter(a, b) {
     // most points at the end of this round
     if (a.now !== b.now) return a.now > b.now;
+    // before round 10: the best chances with the next round's second-best category,
+    // then with its worst (win, then points if win, each)
+    if (a.alt && b.alt) for (let i = 0; i < 4; i++) if (a.alt[i] !== b.alt[i]) return a.alt[i] > b.alt[i];
     if (a.n !== b.n) return a.n < b.n;
     // avoid the most recently banked digits: compare latest bank position used,
     // then the next latest, and so on (smaller wins)
     const x = a.idxs.sorted, y = b.idxs.sorted;
     for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i];
-    // same digits: lean left (cells compared in reading order: category, row, column)
+    // Same digits; only where they go is left. Ordinary books before Bonus II-A, and
+    // II-B last (what wins without II-B also wins in Classic)
+    if (a.nB !== b.nB) return a.nB < b.nB;
+    if (a.nA !== b.nA) return a.nA < b.nA;
+    // lean left (cells compared in reading order: category, row, column)
     const u = a.cellOrder, w = b.cellOrder;
     for (let i = 0; i < u.length; i++) if (u[i] !== w[i]) return u[i] < w[i];
     // still tied (e.g. 890_ vs 098_): prefer Sequences written ascending
