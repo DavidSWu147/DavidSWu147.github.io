@@ -1846,11 +1846,13 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
     inFlight = 0,
     boundsDone = 0,
     processed = 0,
-    tiedDone = 0;
+    tiedDone = 0,
+    altDone = 0;
   let order = [],
     best3 = null,
     tied = [],
-    best = null;
+    best = null,
+    ties = [];
   const base = g => ({
     rows: Array.from(g.state.rows),
     bank: Array.from(g.state.bank),
@@ -1858,7 +1860,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
     usedB: g.state.usedB,
     classic: !!classicMode
   });
-  const report = () => onProgress(phase === 0 ? 0.05 * boundsDone / n : phase === 1 ? 0.05 + 0.85 * processed / n : 0.9 + 0.1 * (tied.length ? tiedDone / tied.length : 1));
+  const report = () => onProgress(phase === 0 ? 0.05 * boundsDone / n : phase === 1 ? 0.05 + 0.85 * processed / n : phase === 2 ? 0.9 + 0.08 * (tied.length ? tiedDone / tied.length : 1) : 0.98 + 0.02 * (ties.length ? altDone / ties.length : 1));
   // the next piece of work, or null if the current phase has nothing left to hand out
   const nextTask = () => {
     if (phase === 0) {
@@ -1904,34 +1906,54 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
       }
       return null;
     }
-    while (nextIdx < tied.length) {
-      const g = tied[nextIdx++];
-      const wins = best === null || tieBetter(g.cand, best.cand);
-      if (best !== null && !(cmp(g.bound.ub, best.v) > 0 || cmp(g.bound.ub, best.v) === 0 && wins)) {
-        tiedDone++;
-        continue;
-      }
-      return {
-        msg: {
-          ...base(g),
-          type: 'solve',
-          bound: g.bound.quick ? null : g.bound,
-          phase: 2,
-          best: best ? best.v : null,
-          tieWins: wins
-        },
-        done: r => {
+    if (phase === 2) {
+      // all four values, then the end-of-round score; equal ones are all kept for phase 3
+      while (nextIdx < tied.length) {
+        const g = tied[nextIdx++];
+        const wins = best === null || g.cand.now >= best.cand.now;
+        if (best !== null && !(cmp(g.bound.ub, best.v) > 0 || cmp(g.bound.ub, best.v) === 0 && wins)) {
           tiedDone++;
-          if (r.bound) g.bound = r.bound;
-          if (r.v === null) return;
-          if (best === null || cmp(r.v, best.v) > 0 || cmp(r.v, best.v) === 0 && tieBetter(g.cand, best.cand)) best = {
-            v: r.v,
-            cand: g.cand
-          };
+          continue;
         }
-      };
+        return {
+          msg: {
+            ...base(g),
+            type: 'solve',
+            bound: g.bound.quick ? null : g.bound,
+            phase: 2,
+            best: best ? best.v : null,
+            tieWins: wins
+          },
+          done: r => {
+            tiedDone++;
+            if (r.bound) g.bound = r.bound;
+            if (r.v === null) return;
+            const c = best === null ? 1 : cmp(r.v, best.v) || g.cand.now - best.cand.now;
+            if (c > 0) {
+              best = {
+                v: r.v,
+                cand: g.cand
+              };
+              ties = [g];
+            } else if (c === 0) ties.push(g);
+          }
+        };
+      }
+      return null;
     }
-    return null;
+    // phase 3: still equal, so the round-9 categories other than the best one decide
+    if (ties.length < 2 || nextIdx >= ties.length) return null;
+    const g = ties[nextIdx++];
+    return {
+      msg: {
+        ...base(g),
+        type: 'alt'
+      },
+      done: r => {
+        g.cand.alt = r.alt;
+        altDone++;
+      }
+    };
   };
   // move on when a phase has handed out everything and all its answers are back
   const advance = () => {
@@ -1943,9 +1965,16 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
       phase = 2;
       nextIdx = 0;
       tied.sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    } else {
+    } else if (phase === 2) {
       phase = 3;
+      nextIdx = 0;
+    } else {
+      phase = 4;
       cancel();
+      for (const g of ties) if (tieBetter(g.cand, best.cand)) best = {
+        v: best.v,
+        cand: g.cand
+      };
       const c = best.cand;
       onDone({
         placements: c.placements.map(p => ({
@@ -1959,7 +1988,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
   };
   // run(task, deliver): hand one task to an executor; deliver(answer) when done
   const pump = run => {
-    while (!cancelled && phase < 3) {
+    while (!cancelled && phase < 4) {
       const t = nextTask();
       if (t) {
         inFlight++;
@@ -1992,6 +2021,9 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
       const st = S.makeState(m.rows, m.bank, m.usedA, m.usedB);
       if (m.type === 'bound') return {
         bound: solver.quickBound(st)
+      };
+      if (m.type === 'alt') return {
+        alt: solver.altValues(st, 2)
       };
       const beats = m.phase === 1 ? v => m.best === null || cmp3(v, m.best) >= 0 : v => m.best === null || cmp(v, m.best) > 0 || cmp(v, m.best) === 0 && m.tieWins;
       const bound = m.bound || solver.positionBound(st);
@@ -2034,10 +2066,12 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
     boundsDone = 0;
     processed = 0;
     tiedDone = 0;
+    altDone = 0;
     best3 = null;
     tied = [];
     best = null;
     order = [];
+    ties = [];
     runOnMainThread();
   };
   const nWorkers = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1));
