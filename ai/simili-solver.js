@@ -1421,8 +1421,8 @@
       quadPct: (100 * v[2]) / scale,
       quadPctExact: pct(v[2]),
       // expected final score given that you lose (null if a loss is impossible)
-      pointsIfLose: v[0] < scale ? v[3] / (scale - v[0]) : null,
-      pointsIfLoseText: v[0] < scale ? ratioDecimal(v[3], scale - v[0], dp) : '-',
+      pointsIfLose: v[0] < scale && v[3] !== undefined ? v[3] / (scale - v[0]) : null,
+      pointsIfLoseText: v[0] < scale && v[3] !== undefined ? ratioDecimal(v[3], scale - v[0], dp) : '-',
     };
   }
 
