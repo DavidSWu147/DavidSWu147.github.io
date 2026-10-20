@@ -5,12 +5,14 @@
 // Always Strict Placement. Classic vs Modern is the only rules parameter.
 //
 // Value of a position = lexicographic vector, kept as exact integers:
-//   [ winCount, pointsIfWonSum, quadCount ]   (each scaled by 1000^roundsLeft)
+//   [ winCount, pointsIfWonSum, quadCount, pointsIfLostSum ]   (scaled by 1000^roundsLeft)
 //   1. chance of finishing with >= 100 points
-//   2. expected points, losses counting 0 (Quad Bonus excluded)
-//   3. chance of holding a Quad (4-of-a-kind Matching row)
-// Booking tie-breaks (top-level only): 4. fewest digits, 5. avoid the most recently banked digits,
-// 6. lean left (same digits placed further left / higher up), 7. ascending Sequences.
+//   2. average final score when winning (sum over winning outcomes; Quad Bonus excluded)
+//   3. chance of holding a Quad (4-of-a-kind Matching row), win or lose
+//   4. average final score when losing (sum over losing outcomes)
+// Booking tie-breaks (top-level only): 5. most points at the end of this round,
+// 6. fewest digits, 7. avoid the most recently banked digits,
+// 8. lean left (same digits placed further left / higher up), 9. ascending Sequences.
 // ============================================================
 (function (root) {
   'use strict';
@@ -273,7 +275,7 @@
 
   Solver.prototype.terminal = function (rows) {
     const s = terminalScore(rows, this.classic), q = hasQuad(rows) ? 1 : 0;
-    return s >= 100 ? [1, s, q] : [0, 0, q];
+    return s >= 100 ? [1, s, q, 0] : [0, 0, q, s];
   };
 
   // Enumerate every distinct end-of-booking-phase result for (state, cat) once the
@@ -607,6 +609,7 @@
   const TB_miss = new Int8Array(10), TB_bk = new Int8Array(10), TB_cur = new Int32Array(ROWS), TB_choice = new Int32Array(ROWS);
   const TB_save = new Int8Array((ROWS + 1) * 10);
   const TB_W = new Int32Array(GMAX + 1), TB_WG = new Int32Array(GMAX + 1), TB_QE = new Int32Array(GMAX + 1), TB_QA = new Int32Array(GMAX + 1);
+  const TB_LG = new Int32Array(GMAX + 1), TB_LQ = new Int32Array(GMAX + 1);
   Solver.prototype.buildTable = function (cat, rc, budget, bank, bonus3Before, watchA, watchB) {
     this.tablesBuilt++;
     const bestGain = TB_bestGain.fill(-1), bestQuad = TB_bestQuad.fill(-1);
@@ -665,7 +668,7 @@
     if (unlock) return null;
     // Per-roll results bucketed by gain, then suffix sums so that a position with
     // base score S0 is evaluated in O(1): wins are rolls with gain >= 100 - S0.
-    const W = TB_W.fill(0), WG = TB_WG.fill(0), QE = TB_QE.fill(0), QA = TB_QA.fill(0);
+    const W = TB_W.fill(0), WG = TB_WG.fill(0), QE = TB_QE.fill(0), QA = TB_QA.fill(0), LG = TB_LG.fill(0), LQ = TB_LQ.fill(0);
     for (let r = 0; r < ROLLS.length; r++) {
       const subs = ROLL_SUBSETS[r];
       let G = -1, GQ = -1;
@@ -678,12 +681,18 @@
       W[G] += wt; WG[G] += wt * G;
       if (GQ === G) QE[G] += wt;
       if (GQ >= 0) QA[G] += wt;
+      // if this roll loses: Quad first, then the most points (with or without a Quad already)
+      LG[G] += wt * G; LQ[G] += wt * (GQ >= 0 ? GQ : G);
     }
-    // One packed array: [sufW | sufWG | sufQE | preQA], each GMAX+2 long (about 2 KB per table).
+    // One packed array: [sufW | sufWG | sufQE | preQA | preLG | preLQ], each GMAX+2 long.
     const L = GMAX + 2;
-    const tab = new Int32Array(4 * L);
+    const tab = new Int32Array(6 * L);
     for (let g = GMAX; g >= 0; g--) { tab[g] = tab[g + 1] + W[g]; tab[L + g] = tab[L + g + 1] + WG[g]; tab[2 * L + g] = tab[2 * L + g + 1] + QE[g]; }
-    for (let g = 0; g <= GMAX; g++) tab[3 * L + g + 1] = tab[3 * L + g] + QA[g];
+    for (let g = 0; g <= GMAX; g++) {
+      tab[3 * L + g + 1] = tab[3 * L + g] + QA[g];
+      tab[4 * L + g + 1] = tab[4 * L + g] + LG[g];
+      tab[5 * L + g + 1] = tab[5 * L + g] + LQ[g];
+    }
     return tab;
   };
 
@@ -698,9 +707,16 @@
     return false;   // unlocking during this round is detected inside finalTable
   }
 
+  // A category table at base score S0 (q0: a Quad is already there) ->
+  // [win, pointsIfWin, quad, pointsIfLose] over the 220 rolls.
+  function evalTab(tab, S0, q0) {
+    const t = Math.max(0, Math.min(GMAX + 1, 100 - S0)), L = GMAX + 2, w = tab[t];
+    return [w, S0 * w + tab[L + t], q0 ? 1000 : tab[2 * L + t] + tab[3 * L + t], S0 * (1000 - w) + tab[(q0 ? 4 : 5) * L + t]];
+  }
   // Whole-position table (used when a free book may be in play): best encoded
   // terminal value per missing multiset. Encoding keeps lexicographic order.
-  const encV = (win, s, q) => (win ? 1000 + 2 * s + q : q);
+  // win: 1000 + 2*score + quad; loss: 200*quad + score (score < 100)
+  const encV = (win, s, q) => (win ? 1000 + 2 * s + q : 200 * q + s);
   // The result only depends on part of the position, so it is cached by that part:
   //  - the booked category and Sequence (free books can add two digits there, and
   //    unlock each other) in full;
@@ -708,7 +724,7 @@
   //    Sequence if the first did not), so only its rows that one digit can improve
   //    matter, plus how many rows are full (Bonus III) and whether it has a Quad.
   // Results are stored relative to the current score, which makes them shareable:
-  // gq[m] = best 2*gain + quad, aq[m] = best quad, for missing multiset m.
+  // gq[m] = best 2*gain + quad, lq[m] = best 200*quad + gain, for missing multiset m.
   Solver.prototype.fullFinalTable = function (st, cat) {
     const classic = this.classic, rows = st.rows;
     const parts = [cat, st.usedA * 3 + st.usedB];
@@ -736,7 +752,7 @@
     const S0 = terminalScore(rows, classic);
     if (ent === undefined) {
       this.fullTablesBuilt++;
-      const gq = new Int16Array(MISS_N).fill(-1), aq = new Int8Array(MISS_N);
+      const gq = new Int16Array(MISS_N).fill(-1), lq = new Int16Array(MISS_N).fill(-1);
       const q0 = hasQuad(rows) ? 1 : 0;
       // Sequence with no free book at hand yet: bookings that unlock none are covered by
       // the plain table (also a lower bound for those that do), so only the unlocking
@@ -748,29 +764,44 @@
         if (!freeNow) {
           unlockOnly = true;
           const g = this.plainGains(st, SEQ, bonus3Of(rows, classic));
-          for (let m = 0; m < MISS_N; m++) if (g[m] >= 0) { gq[m] = 2 * g[m] + q0; aq[m] = q0; }
+          for (let m = 0; m < MISS_N; m++) if (g[m] >= 0) { gq[m] = 2 * g[m] + q0; lq[m] = 200 * q0 + g[m]; }
         }
       }
       const rec = (m, s, q) => {
-        const v = 2 * (s - S0) + q;
+        const v = 2 * (s - S0) + q, u = 200 * q + (s - S0);
         if (v > gq[m]) gq[m] = v;
-        if (q > aq[m]) aq[m] = q;
+        if (u > lq[m]) lq[m] = u;
       };
       this.forEachBooking(st, cat, st.bank, true, false,
         (r, bk, uA, uB, n, pl, m) => rec(m, terminalScore(r, classic), hasQuad(r) ? 1 : 0), 3,
         (m, s, q) => rec(m, s, q ? 1 : 0), unlockOnly);
-      ent = { gq, aq };
+      ent = { gq, lq };
       if (this.fullCache.size >= (this.maxTables >> 2)) this.fullCache.clear();
       this.fullCache.set(key, ent);
     }
     const best = new Int16Array(MISS_N).fill(-1);
-    const { gq, aq } = ent;
+    const { gq, lq } = ent;
     for (let m = 0; m < MISS_N; m++) {
       if (gq[m] < 0) continue;
-      best[m] = S0 + (gq[m] >> 1) >= 100 ? 1000 + 2 * S0 + gq[m] : aq[m];
+      if (S0 + (gq[m] >> 1) >= 100) best[m] = 1000 + 2 * S0 + gq[m];
+      else { const q = lq[m] >= 200 ? 1 : 0; best[m] = 200 * q + S0 + lq[m] - 200 * q; }
     }
     return best;
   };
+
+  // Sum a whole-position table over the 220 rolls into [win, pointsIfWin, quad, pointsIfLose].
+  function aggregateFull(full) {
+    let w = 0, p = 0, q = 0, l = 0;
+    for (let r = 0; r < ROLLS.length; r++) {
+      const subs = ROLL_SUBSETS[r];
+      let V = -1;
+      for (let k = 0; k < subs.length; k++) if (full[subs[k]] > V) V = full[subs[k]];
+      const wt = ROLLS[r].w;
+      if (V >= 1000) { w += wt; p += wt * ((V - 1000) >> 1); q += wt * (V & 1); }
+      else { const qq = V >= 200 ? 1 : 0; q += wt * qq; l += wt * (V - 200 * qq); }
+    }
+    return [w, p, q, l];
+  }
 
   Solver.prototype.finalValue = function (st) {
     const rows = st.rows;
@@ -789,22 +820,11 @@
       const tab = bonusMaybeUsable(st, this.classic, cat) ? null : this.finalTable(st, cat, b3);
       let v;
       if (tab) {
-        const t = Math.max(0, Math.min(GMAX + 1, 100 - S0));
-        const L = GMAX + 2, w = tab[t];
-        v = [w, S0 * w + tab[L + t], q0 ? 1000 : tab[2 * L + t] + tab[3 * L + t]];
+        v = evalTab(tab, S0, q0);
       } else {
         this.fullTablesBuilt++;
         const full = this.fullFinalTable(st, cat);
-        let w = 0, p = 0, q = 0;
-        for (let r = 0; r < ROLLS.length; r++) {
-          const subs = ROLL_SUBSETS[r];
-          let V = -1;
-          for (let k = 0; k < subs.length; k++) if (full[subs[k]] > V) V = full[subs[k]];
-          const wt = ROLLS[r].w;
-          if (V >= 1000) { w += wt; p += wt * ((V - 1000) >> 1); q += wt * (V & 1); }
-          else q += wt * V;
-        }
-        v = [w, p, q];
+        v = aggregateFull(full);
       }
       if (best === null || cmp(v, best) > 0) best = v;
     }
@@ -840,10 +860,7 @@
   // the best found. Free books (Bonus II) break the argument, so a booking that uses
   // one, or after which one is unlocked and unused, or could be unlocked in round 10
   // (the tables detect that and return no bound), is always evaluated exactly.
-  const evalTab = (tab, S0, q0) => {
-    const t = Math.max(0, Math.min(GMAX + 1, 100 - S0)), L = GMAX + 2, w = tab[t];
-    return [w, S0 * w + tab[L + t], q0 ? 1000 : tab[2 * L + t] + tab[3 * L + t]];
-  };
+
   const bonus3Of = (rows, classic) => {
     let n15 = 0, m20 = 0, l20 = 0;
     for (let i = 0; i < ROWS; i++) {
@@ -1011,48 +1028,39 @@
         v = null;
         for (let c = 0; c < 3; c++) {
           const tab = freeNow ? null : this.fastTable(c, rows, bk, uA, uB, b3, n10);
-          const cv = tab ? [tab[t], S0 * tab[t] + tab[L + t], q0 ? 1000 : tab[2 * L + t] + tab[3 * L + t]] : this.fullCategoryValue(st, c);
+          const cv = tab ? evalTab(tab, S0, q0) : this.fullCategoryValue(st, c);
           if (v === null || cmp(cv, v) > 0) v = cv;
         }
         if (this.memo[1].size >= this.maxMemo) this.memo[1].clear();
         this.memo[1].set(key, v);
       }
-      out[0] = v[0]; out[1] = v[1]; out[2] = v[2];
+      out[0] = v[0]; out[1] = v[1]; out[2] = v[2]; out[3] = v[3];
       return;
     }
-    let bw = -1, bp = 0, bq = 0;
+    let bw = -1, bp = 0, bq = 0, bl = 0;
+    const qo = (q0 ? 4 : 5) * L;
     for (let c = 0; c < 3; c++) {
       const tab = tabs[c];
-      const w = tab[t], p = S0 * w + tab[L + t], q = q0 ? 1000 : tab[2 * L + t] + tab[3 * L + t];
-      if (w > bw || (w === bw && (p > bp || (p === bp && q > bq)))) { bw = w; bp = p; bq = q; }
+      const w = tab[t], p = S0 * w + tab[L + t], q = q0 ? 1000 : tab[2 * L + t] + tab[3 * L + t], l = S0 * (1000 - w) + tab[qo + t];
+      if (w > bw || (w === bw && (p > bp || (p === bp && (q > bq || (q === bq && l > bl)))))) { bw = w; bp = p; bq = q; bl = l; }
     }
-    out[0] = bw; out[1] = bp; out[2] = bq;
+    out[0] = bw; out[1] = bp; out[2] = bq; out[3] = bl;
   };
   // One category's round-10 value through the whole-position table (free books).
   Solver.prototype.fullCategoryValue = function (st, cat) {
     this.fullTablesBuilt++;
-    const full = this.fullFinalTable(st, cat);
-    let w = 0, p = 0, q = 0;
-    for (let r = 0; r < ROLLS.length; r++) {
-      const subs = ROLL_SUBSETS[r];
-      let V = -1;
-      for (let k = 0; k < subs.length; k++) if (full[subs[k]] > V) V = full[subs[k]];
-      const wt = ROLLS[r].w;
-      if (V >= 1000) { w += wt; p += wt * ((V - 1000) >> 1); q += wt * (V & 1); }
-      else q += wt * V;
-    }
-    return [w, p, q];
+    return aggregateFull(this.fullFinalTable(st, cat));
   };
   // Best value over round-9 bookings for `c9` with this bank (roll included).
   Solver.prototype.bestAfterRollFast = function (st, c9, bank) {
-    const out = this.v1out || (this.v1out = new Float64Array(3));
-    let bw = -1, bp = 0, bq = 0;
+    const out = this.v1out || (this.v1out = new Float64Array(4));
+    let bw = -1, bp = 0, bq = 0, bl = 0;
     this.forEachBooking(st, c9, bank, false, false, (rows, bk, uA, uB) => {
       this.v1Fast(rows, bk, uA, uB, out);
       this.nodes++;
-      if (out[0] > bw || (out[0] === bw && (out[1] > bp || (out[1] === bp && out[2] > bq)))) { bw = out[0]; bp = out[1]; bq = out[2]; }
+      if (out[0] > bw || (out[0] === bw && (out[1] > bp || (out[1] === bp && (out[2] > bq || (out[2] === bq && out[3] > bl)))))) { bw = out[0]; bp = out[1]; bq = out[2]; bl = out[3]; }
     });
-    return [bw, bp, bq];
+    return [bw, bp, bq, bl];
   };
 
   Solver.prototype.genericValue = function (st, roundsLeft) {
@@ -1077,7 +1085,7 @@
   };
   // Same, summed over rolls ROLLS[r0..r1) only, so the work can be split across threads.
   Solver.prototype.categoryValueRange = function (st, cat, roundsLeft, r0, r1) {
-    const acc = [0, 0, 0];
+    const acc = [0, 0, 0, 0];
     const bank = new Int8Array(10);
     const pruned = roundsLeft === 2 && this.prune && this.fastFinal;
     const fast2 = roundsLeft === 2 && !this.prune && this.fastFinal && this.fast2;
@@ -1086,7 +1094,7 @@
       bank.set(st.bank);
       for (const d of r.digits) bank[d]++;
       const v = pruned ? this.bestAfterRollPruned(st, cat, bank) : fast2 ? this.bestAfterRollFast(st, cat, bank) : this.bestAfterRoll(st, cat, bank, roundsLeft);
-      acc[0] += r.w * v[0]; acc[1] += r.w * v[1]; acc[2] += r.w * v[2];
+      acc[0] += r.w * v[0]; acc[1] += r.w * v[1]; acc[2] += r.w * v[2]; acc[3] += r.w * v[3];
     }
     return acc;
   };
@@ -1103,7 +1111,7 @@
     return best;
   };
 
-  function cmp(a, b) { return a[0] - b[0] || a[1] - b[1] || a[2] - b[2]; }
+  function cmp(a, b) { return a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]; }
 
   // ---------- top-level API ----------
   // Start of round 10: which of the 220 rolls win (reach 100) for category `cat`.
@@ -1142,7 +1150,7 @@
     let best = null;
     this.forEachBooking(st, cat, bank, final, true, (rows, bk, uA, uB, nMain, placements) => {
       const v = final ? this.terminal(rows) : this.value(makeState(rows, bk, uA, uB), roundsLeft - 1);
-      const cand = candidateOf(rows, placements, bankList);
+      const cand = candidateOf(rows, placements, bankList, this.classic);
       cand.v = v;
       if (best === null || better(cand, best)) best = cand;
     });
@@ -1250,12 +1258,12 @@
     const per = [[], [], []], tot = [];
     const bb = new Int8Array(10);
     for (let c = 0; c < 3; c++) {
-      const acc = [0, 0, 0];
+      const acc = [0, 0, 0, 0];
       for (const r of ROLLS) {
         bb.set(st.bank); for (const d of r.digits) bb[d]++;
         const u = this.rollBound(st, c, bb, free);
         per[c].push(u);
-        acc[0] += r.w * u[0]; acc[1] += r.w * u[1]; acc[2] += r.w * u[2];
+        acc[0] += r.w * u[0]; acc[1] += r.w * u[1]; acc[2] += r.w * u[2]; acc[3] += r.w * u[3];
       }
       tot.push(acc);
     }
@@ -1272,7 +1280,7 @@
     const ok = v => beats(v) && (best === null || cmp(v, best) > 0);
     for (const c of order) {
       if (!ok(bound.tot[c])) continue;
-      const part = [0, 0, 0], rem = bound.tot[c].slice(), s = [0, 0, 0];
+      const part = [0, 0, 0, 0], rem = bound.tot[c].slice(), s = [0, 0, 0, 0];
       let done = true;
       // rolls with the most at stake first, so a hopeless category is dropped early
       const per = bound.per[c];
@@ -1283,7 +1291,7 @@
         const v = this.fastFinal && this.fast2 ? this.bestAfterRollFast(st, c, bb) : this.bestAfterRoll(st, c, bb, 2);
         const u = bound.per[c][ri];
         if (cmp(v, u) > 0) this.boundViolations = (this.boundViolations || 0) + 1;
-        for (let j = 0; j < 3; j++) { part[j] += r.w * v[j]; rem[j] -= r.w * u[j]; s[j] = part[j] + rem[j]; }
+        for (let j = 0; j < 4; j++) { part[j] += r.w * v[j]; rem[j] -= r.w * u[j]; s[j] = part[j] + rem[j]; }
         this.rollsSolved = (this.rollsSolved || 0) + 1;
         if (this.deadline && Date.now() > this.deadline) return undefined;
         if (!ok(s)) { done = false; break; }
@@ -1300,7 +1308,7 @@
     const groups = new Map();
     this.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
       const key = this.key(rows, bk, uA, uB, roundsLeft - 1);
-      const cand = candidateOf(rows, placements, bankList);
+      const cand = candidateOf(rows, placements, bankList, this.classic);
       const g = groups.get(key);
       if (!g) groups.set(key, { state: makeState(rows, bk, uA, uB), cand });
       else if (tieBetter(cand, g.cand)) g.cand = cand;
@@ -1346,21 +1354,23 @@
     return f.length > 0 && f.every(x => x === f[0]);
   }
   // tie-break data for one booking (placements as built by forEachBooking with `track`)
-  function candidateOf(rows, placements, bankList) {
+  function candidateOf(rows, placements, bankList, classic) {
     const n = placements.length;
     const idxs = assignBankIndices(bankList, placements);
     const cellOrder = placements.map(p => p.cat * 100 + p.row * 10 + p.col).sort((x, y) => x - y);
     let ascending = 0;
     for (const r of new Set(placements.filter(p => p.cat === SEQ).map(p => p.row))) if (isAscendingRow(rows[r])) ascending++;
-    return { v: null, n, idxs, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
+    return { v: null, now: terminalScore(rows, classic), n, idxs, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
   }
   function better(a, b) {
     const c = cmp(a.v, b.v);
     if (c !== 0) return c > 0;
     return tieBetter(a, b);
   }
-  // tie-breaks 4-7 only (equal values)
+  // tie-breaks 5-9 only (equal values)
   function tieBetter(a, b) {
+    // most points at the end of this round
+    if (a.now !== b.now) return a.now > b.now;
     if (a.n !== b.n) return a.n < b.n;
     // avoid the most recently banked digits: compare latest bank position used,
     // then the next latest, and so on (smaller wins)
@@ -1410,6 +1420,9 @@
       pointsIfWinText: v[0] ? ratioDecimal(v[1], v[0], dp) : '-',
       quadPct: (100 * v[2]) / scale,
       quadPctExact: pct(v[2]),
+      // expected final score given that you lose (null if a loss is impossible)
+      pointsIfLose: v[0] < scale ? v[3] / (scale - v[0]) : null,
+      pointsIfLoseText: v[0] < scale ? ratioDecimal(v[3], scale - v[0], dp) : '-',
     };
   }
 
