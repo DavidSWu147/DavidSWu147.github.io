@@ -1498,6 +1498,29 @@
     for (let c = 1; c < 3; c++) if (cmp(tot[c], ub) > 0) ub = tot[c];
     return { per, tot, ub };
   };
+  // Cheap estimates of a round-9 start position, for ordering (never for the answer):
+  //  - 'r10': its value as if round 10 came next (one round of table lookups);
+  //  - 'sample': the round-9 analysis (display mode) over every k-th roll only.
+  const SAMPLE_ROLLS = k => ROLLS.map((r, i) => i).filter(i => i % k === Math.floor(k / 2));
+  Solver.prototype.screenValue = function (st, kind, k) {
+    if (kind === 'r10') return this.value(st, 1);
+    const idx = SAMPLE_ROLLS(k || 10), bb = new Int8Array(10);
+    const saved = this.exactLoss;
+    this.exactLoss = false;
+    let best = null;
+    for (let c = 0; c < 3; c++) {
+      const acc = [0, 0, 0, 0];
+      for (const i of idx) {
+        const r = ROLLS[i];
+        bb.set(st.bank); for (const d of r.digits) bb[d]++;
+        const v = this.bestAfterRollFast(st, c, bb);
+        for (let j = 0; j < 4; j++) acc[j] += r.w * v[j];
+      }
+      if (best === null || cmp3(acc, best) > 0) best = acc;
+    }
+    this.exactLoss = saved;
+    return best;
+  };
   // Round-9 start value, abandoning categories that cannot satisfy beats(value).
   // Returns the exact value, or null if it cannot satisfy beats().
   Solver.prototype.valueWithCutoff = function (st, bound, beats) {
@@ -1559,8 +1582,14 @@
       if (Date.now() > this.deadline) return { timedOut: true, stats: { positions: groups.length, solved: 0, ms: Date.now() - t0 } };
     }
     const refine = g => { if (mode === 'lazy' && g.bound.quick) g.bound = this.positionBound(g.state); };
+    // opts.order: solve positions best bound first (default), or by a screen ('r10',
+    // 'sample'), which tends to find the best play sooner; the answer is the same
+    const order = opts && opts.order;
+    if (order) for (const g of groups) g.screen = this.screenValue(g.state, order, opts.sampleK);
+    const key = g => (order ? g.screen : g.bound.ub);
     const tBound = Date.now() - t0;
-    groups.sort((a, b) => cmp(b.bound.ub, a.bound.ub) || (tieBetter(a.cand, b.cand) ? -1 : tieBetter(b.cand, a.cand) ? 1 : 0));
+    groups.sort((a, b) => cmp(key(b), key(a)) || (tieBetter(a.cand, b.cand) ? -1 : tieBetter(b.cand, a.cand) ? 1 : 0));
+    this.lastGroups = groups;
     // Phase 1: the first three values only (win, points if win, Quad), which lets the
     // search skip far more; keep every position that ties for the best on those.
     const exactSaved = this.exactLoss;
@@ -1580,7 +1609,7 @@
         const c = best3 === null ? 1 : cmp3(v, best3);
         if (c > 0) { best3 = v; tied = [g]; } else if (c === 0) tied.push(g);
       }
-      if (this.trace) this.trace({ index: solved, of: groups.length, bound: g.bound.ub, value: v, best: best3, rolls: (this.rollsSolved || 0) - r0, ms: Date.now() - tc });
+      if (this.trace) this.trace({ index: solved, of: groups.length, bound: g.bound.ub, value: v, best: best3, rolls: (this.rollsSolved || 0) - r0, ms: Date.now() - tc, group: g });
     }
     this.exactLoss = exactSaved;
     // Phase 2: exact values (points if lost too) for the tied ones, then the end-of-round
