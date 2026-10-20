@@ -1820,6 +1820,261 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
   }
   return cancel;
 }
+
+// --- Round 8 Hint: the exact round-8 search (see bestBookingBnB in simili-solver.js,
+// bounds: 'lazy'), spread over Web Workers. Phase 0: a quick upper bound for every
+// position the booking can lead to. Phase 1: positions solved best bound first on
+// win / points if win / Quad, skipping any whose bound cannot reach the best so far
+// (a worker works out the tighter per-roll bounds just before solving). Phase 2:
+// positions tied with the best, on all four values, then the booking tie-breaks.
+// Returns cancel().
+function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
+  const S = SimiliSolver,
+    cmp = S.compareValues,
+    cmp3 = S.compareFirst3,
+    tieBetter = S.tieBreakBetter;
+  let cancelled = false;
+  const workers = [];
+  const cancel = () => {
+    cancelled = true;
+    workers.forEach(w => w.terminate());
+  };
+  const groups = previewMainSolver(classicMode).bookingGroups(state, cat, bankList, 3);
+  const n = groups.length;
+  let phase = 0,
+    nextIdx = 0,
+    inFlight = 0,
+    boundsDone = 0,
+    processed = 0,
+    tiedDone = 0;
+  let order = [],
+    best3 = null,
+    tied = [],
+    best = null;
+  const base = g => ({
+    rows: Array.from(g.state.rows),
+    bank: Array.from(g.state.bank),
+    usedA: g.state.usedA,
+    usedB: g.state.usedB,
+    classic: !!classicMode
+  });
+  const report = () => onProgress(phase === 0 ? 0.05 * boundsDone / n : phase === 1 ? 0.05 + 0.85 * processed / n : 0.9 + 0.1 * (tied.length ? tiedDone / tied.length : 1));
+  // the next piece of work, or null if the current phase has nothing left to hand out
+  const nextTask = () => {
+    if (phase === 0) {
+      if (nextIdx >= n) return null;
+      const g = groups[nextIdx++];
+      return {
+        msg: {
+          ...base(g),
+          type: 'bound'
+        },
+        done: r => {
+          g.bound = r.bound;
+          boundsDone++;
+        }
+      };
+    }
+    if (phase === 1) {
+      while (nextIdx < order.length) {
+        const g = order[nextIdx++];
+        if (best3 !== null && cmp3(g.bound.ub, best3) < 0) {
+          processed++;
+          continue;
+        }
+        return {
+          msg: {
+            ...base(g),
+            type: 'solve',
+            bound: g.bound.quick ? null : g.bound,
+            phase: 1,
+            best: best3
+          },
+          done: r => {
+            processed++;
+            if (r.bound) g.bound = r.bound;
+            if (r.v === null) return;
+            const c = best3 === null ? 1 : cmp3(r.v, best3);
+            if (c > 0) {
+              best3 = r.v;
+              tied = [g];
+            } else if (c === 0) tied.push(g);
+          }
+        };
+      }
+      return null;
+    }
+    while (nextIdx < tied.length) {
+      const g = tied[nextIdx++];
+      const wins = best === null || tieBetter(g.cand, best.cand);
+      if (best !== null && !(cmp(g.bound.ub, best.v) > 0 || cmp(g.bound.ub, best.v) === 0 && wins)) {
+        tiedDone++;
+        continue;
+      }
+      return {
+        msg: {
+          ...base(g),
+          type: 'solve',
+          bound: g.bound.quick ? null : g.bound,
+          phase: 2,
+          best: best ? best.v : null,
+          tieWins: wins
+        },
+        done: r => {
+          tiedDone++;
+          if (r.bound) g.bound = r.bound;
+          if (r.v === null) return;
+          if (best === null || cmp(r.v, best.v) > 0 || cmp(r.v, best.v) === 0 && tieBetter(g.cand, best.cand)) best = {
+            v: r.v,
+            cand: g.cand
+          };
+        }
+      };
+    }
+    return null;
+  };
+  // move on when a phase has handed out everything and all its answers are back
+  const advance = () => {
+    if (phase === 0) {
+      phase = 1;
+      nextIdx = 0;
+      order = groups.slice().sort((a, b) => cmp(b.bound.ub, a.bound.ub) || (tieBetter(a.cand, b.cand) ? -1 : tieBetter(b.cand, a.cand) ? 1 : 0));
+    } else if (phase === 1) {
+      phase = 2;
+      nextIdx = 0;
+      tied.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    } else {
+      phase = 3;
+      cancel();
+      const c = best.cand;
+      onDone({
+        placements: c.placements.map(p => ({
+          ...p,
+          category: S.CAT_NAMES[p.cat]
+        })),
+        value: best.v,
+        ...S.describeValue(best.v, 1e6)
+      });
+    }
+  };
+  // run(task, deliver): hand one task to an executor; deliver(answer) when done
+  const pump = run => {
+    while (!cancelled && phase < 3) {
+      const t = nextTask();
+      if (t) {
+        inFlight++;
+        if (!run(t)) {
+          inFlight--;
+          nextIdx--;
+          return;
+        }
+        continue;
+      }
+      if (inFlight > 0) return;
+      advance();
+      report();
+    }
+  };
+  const finish = (t, r) => {
+    inFlight--;
+    if (cancelled) return;
+    t.done(r);
+    report();
+  };
+  // Main-thread fallback (pages opened from a file cannot start workers): one task per tick
+  const runOnMainThread = () => {
+    const solver = new S.Solver({
+      classic: !!classicMode,
+      exactLoss: false
+    });
+    let queued = null;
+    const exec = m => {
+      const st = S.makeState(m.rows, m.bank, m.usedA, m.usedB);
+      if (m.type === 'bound') return {
+        bound: solver.quickBound(st)
+      };
+      const beats = m.phase === 1 ? v => m.best === null || cmp3(v, m.best) >= 0 : v => m.best === null || cmp(v, m.best) > 0 || cmp(v, m.best) === 0 && m.tieWins;
+      const bound = m.bound || solver.positionBound(st);
+      solver.exactLoss = m.phase !== 1;
+      const v = solver.valueWithCutoff(st, bound, beats);
+      solver.exactLoss = false;
+      return {
+        v,
+        bound: m.bound ? undefined : bound
+      };
+    };
+    const take = t => {
+      if (queued) return false;
+      queued = t;
+      return true;
+    };
+    const step = () => {
+      if (cancelled) return;
+      if (queued) {
+        const t = queued;
+        queued = null;
+        finish(t, exec(t.msg));
+      }
+      pump(take);
+      if (queued && !cancelled) setTimeout(step, 0);
+    };
+    pump(take);
+    setTimeout(step, 0);
+  };
+  const restartOnMainThread = () => {
+    workers.forEach(x => {
+      x.onmessage = null;
+      x.onerror = null;
+      x.terminate();
+    });
+    workers.length = 0;
+    phase = 0;
+    nextIdx = 0;
+    inFlight = 0;
+    boundsDone = 0;
+    processed = 0;
+    tiedDone = 0;
+    best3 = null;
+    tied = [];
+    best = null;
+    order = [];
+    runOnMainThread();
+  };
+  const nWorkers = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1));
+  try {
+    const idle = [];
+    const runOnWorker = t => {
+      const w = idle.pop();
+      if (!w) return false;
+      w.task = t;
+      w.postMessage(t.msg);
+      return true;
+    };
+    for (let i = 0; i < nWorkers; i++) {
+      const w = new Worker('ai/simili-worker.js');
+      w.onmessage = e => {
+        if (cancelled) return;
+        const t = w.task;
+        w.task = null;
+        idle.push(w);
+        finish(t, e.data);
+        pump(runOnWorker);
+      };
+      // a worker that fails to load: start over without workers
+      w.onerror = e => {
+        e.preventDefault();
+        if (!cancelled) restartOnMainThread();
+      };
+      workers.push(w);
+      idle.push(w);
+    }
+    report();
+    pump(runOnWorker);
+  } catch (err) {
+    restartOnMainThread();
+  }
+  return cancel;
+}
 function NextRoundPreview({
   ps,
   bank,
@@ -2028,7 +2283,8 @@ function PlayerSheet({
   winChances,
   quadBonus,
   hintsOn,
-  round9Odds
+  round9Odds,
+  r8Job
 }) {
   const grids = ps.grids;
   const seqBonusI = hasSequenceBonusI(grids);
@@ -2493,27 +2749,60 @@ function PlayerSheet({
       e.target.style.color = '#888';
       e.target.style.borderColor = '#ccc';
     }
-  }, "\u21A9 Undo"), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 2 && typeof SimiliSolver !== 'undefined' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
-    onClick: () => onHint(playerIdx),
-    title: ps.hint ? 'Take back the suggested booking' : 'Book the best play for this round',
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 12,
-      padding: '4px 10px',
-      background: ps.hint ? '#d4a017' : '#fffde6',
-      color: ps.hint ? '#fff' : '#8b6914',
-      border: '1.5px solid #b8860b',
-      borderRadius: 4,
-      cursor: 'pointer',
-      fontWeight: ps.hint ? 'bold' : 'normal',
-      boxShadow: ps.hint ? '0 0 0 2px #f5e6a8' : 'none'
-    }
-  }, "\uD83D\uDCA1 Hint"), ps.hint && ps.hint.note && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: '#8b6914'
-    }
-  }, ps.hint.note)), /*#__PURE__*/React.createElement("button", {
+  }, "\u21A9 Undo"), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && (() => {
+    // Round 8: the hint is worked out in the background (gold progress bar);
+    // clicking again while it runs stops it, and a finished one is booked on click
+    const job = !ps.hint && r8Job && !r8Job.result ? r8Job : null;
+    const ready = !ps.hint && r8Job && r8Job.result && r8Job.stale;
+    const pct = job ? Math.round((job.progress || 0) * 100) : 0;
+    const secs = job ? Math.round((Date.now() - job.started) / 1000) : 0;
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+      onClick: () => onHint(playerIdx),
+      title: ps.hint ? 'Take back the suggested booking' : job ? 'Stop working out the hint' : 'Book the best play for this round',
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 12,
+        padding: '4px 10px',
+        background: ps.hint ? '#d4a017' : '#fffde6',
+        color: ps.hint ? '#fff' : '#8b6914',
+        border: '1.5px solid #b8860b',
+        borderRadius: 4,
+        cursor: 'pointer',
+        fontWeight: ps.hint ? 'bold' : 'normal',
+        boxShadow: ps.hint ? '0 0 0 2px #f5e6a8' : 'none'
+      }
+    }, "\uD83D\uDCA1 Hint"), job && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: 110,
+        height: 8,
+        background: '#f3ead0',
+        borderRadius: 4,
+        overflow: 'hidden'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: `${pct}%`,
+        height: '100%',
+        background: '#d4a017',
+        transition: 'width 0.3s'
+      }
+    })), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#8b6914'
+      }
+    }, `${pct}% · ${secs}s`)), ready && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#8b6914'
+      }
+    }, "Hint ready"), ps.hint && ps.hint.note && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#8b6914'
+      }
+    }, ps.hint.note));
+  })(), /*#__PURE__*/React.createElement("button", {
     onClick: () => onEndRound(playerIdx),
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2533,7 +2822,7 @@ function PlayerSheet({
     classicMode: classicMode,
     laxPlacement: laxPlacement,
     redInk: redInk,
-    autoRun: !!ps.hint && round === TOTAL_ROUNDS - 2
+    autoRun: !!ps.hint
   })), phase === 'endgame-bonus' && !ps.bonusBookPhase && !ps.roundDone && (() => {
     const anyUnused = ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed || ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed;
     return /*#__PURE__*/React.createElement("div", {
@@ -3250,10 +3539,23 @@ window.Simili = function Simili() {
   const [round10WinChances, setRound10WinChances] = useState(null);
   const [round9Start, setRound9Start] = useState(null); // solver positions at the start of Round 9, per player
   const [round9Odds, setRound9Odds] = useState(null); // per player: { progress, result }
+  const [r8Jobs, setR8Jobs] = useState([]); // Round 8 hint per player: { key, started, progress, result, stale }
+  const r8CancelRef = useRef([]);
+  const setR8Job = (i, fn) => setR8Jobs(js => {
+    const n = [...js];
+    n[i] = fn(n[i] || null);
+    return n;
+  });
+  const stopR8Job = i => {
+    if (r8CancelRef.current[i]) r8CancelRef.current[i]();
+    r8CancelRef.current[i] = null;
+  };
   const round9JobRef = useRef(null); // array per player: [{sequence:{winPct,outs}, matching:{...}, ladder:{...}}, ...]
 
   // Player states
   const [players, setPlayers] = useState([createPlayerState()]);
+  const playersRef = useRef(players);
+  playersRef.current = players;
 
   // --- Background Music Engine ---
   const audioRef = useRef(null);
@@ -3540,7 +3842,50 @@ window.Simili = function Simili() {
       bankList
     } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(start) : start, bank.map(b => b.digit));
     const cat = ['sequence', 'matching', 'ladder'].indexOf(start.chosenCategory);
+    if (round === TOTAL_ROUNDS - 3) {
+      // Round 8: the exact search can take a while, so it runs on the workers
+      const key = JSON.stringify([start.grids, start.bankUsed, start.chosenCategory, bank.length]);
+      const job = r8Jobs[playerIdx];
+      if (job && job.key === key && job.result) {
+        applyHint(playerIdx, start, job.result);
+        return;
+      }
+      if (job && job.key === key && r8CancelRef.current[playerIdx]) {
+        stopR8Job(playerIdx);
+        setR8Job(playerIdx, () => null);
+        return;
+      }
+      stopR8Job(playerIdx);
+      setR8Job(playerIdx, () => ({
+        key,
+        started: Date.now(),
+        progress: 0,
+        result: null,
+        stale: false
+      }));
+      r8CancelRef.current[playerIdx] = startRound8Job(state, cat, bankList, classicMode, pr => setR8Job(playerIdx, j => j && j.key === key ? {
+        ...j,
+        progress: pr
+      } : j), best => {
+        r8CancelRef.current[playerIdx] = null;
+        // book it now if nothing has been booked by hand meanwhile; otherwise keep it for a click
+        const q = playersRef.current[playerIdx];
+        const untouched = q && q.undoStack.length === 0 && !q.hint && !q.roundDone;
+        if (untouched) applyHint(playerIdx, start, best);
+        setR8Job(playerIdx, j => j && j.key === key ? {
+          ...j,
+          progress: 1,
+          result: best,
+          stale: !untouched
+        } : j);
+      });
+      return;
+    }
     const best = previewMainSolver(classicMode).bestBooking(state, cat, bankList, TOTAL_ROUNDS - round);
+    applyHint(playerIdx, start, best);
+  };
+  // the player with the hinted booking made (from the round's starting position)
+  const hintedPlayer = (start, best) => {
     const placements = laxPlacement ? placementsToLax(start.grids, best.placements) : best.placements;
     let ns = {
       ...start,
@@ -3550,14 +3895,15 @@ window.Simili = function Simili() {
     // Round 10 always gives the outcome; Round 9 points out an empty booking
     const note = round === TOTAL_ROUNDS - 1 ? best.winPct === 100 ? `Best play wins with ${best.pointsIfWinText}` : 'No booking reaches 100' : best.placements.length === 0 ? 'Best play: book nothing' : '';
     const cells = placements.map(pl => `${pl.category}-${pl.row}-${pl.col}`);
-    updatePlayerFn(playerIdx, () => ({
+    return {
       ...ns,
       hint: {
         note,
         cells
       }
-    }));
+    };
   };
+  const applyHint = (playerIdx, start, best) => updatePlayerFn(playerIdx, () => hintedPlayer(start, best));
   const handleUndo = playerIdx => {
     updatePlayerFn(playerIdx, p => {
       if (p.undoStack.length === 0) return p;
@@ -3708,6 +4054,30 @@ window.Simili = function Simili() {
       stop();
     };
   }, [hintsOn, round, round9Start]);
+
+  // Round 8 hints stop when the round moves on, Hints are switched off, or the player ends the round
+  useEffect(() => {
+    if (round !== TOTAL_ROUNDS - 3 || !hintsOn || phase !== 'book') {
+      r8CancelRef.current.forEach((c, i) => stopR8Job(i));
+      if (r8Jobs.length) setR8Jobs([]);
+    }
+  }, [round, hintsOn, phase]);
+  useEffect(() => {
+    players.forEach((p, i) => {
+      if (p.roundDone && r8CancelRef.current[i]) {
+        stopR8Job(i);
+        setR8Job(i, () => null);
+      }
+    });
+  }, [players]);
+  useEffect(() => () => r8CancelRef.current.forEach((c, i) => stopR8Job(i)), []);
+  const [, setR8Tick] = useState(0);
+  const r8Running = r8Jobs.some(j => j && !j.result);
+  useEffect(() => {
+    if (!r8Running) return;
+    const t = setInterval(() => setR8Tick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [r8Running]);
   const handleUseBonusBook = (playerIdx, source) => {
     updatePlayer(playerIdx, {
       bonusBookPhase: true,
@@ -4385,7 +4755,8 @@ window.Simili = function Simili() {
     winChances: round10WinChances ? round10WinChances[idx] : null,
     quadBonus: quadBonus,
     hintsOn: hintsOn,
-    round9Odds: round9Odds ? round9Odds[idx] : null
+    round9Odds: round9Odds ? round9Odds[idx] : null,
+    r8Job: r8Jobs[idx] || null
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
