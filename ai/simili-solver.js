@@ -164,8 +164,11 @@
     const deadRep = new Map();
     for (const c of legal) if (dead(c)) { const sc = SCORE[cat][c]; if (!deadRep.has(sc) || c < deadRep.get(sc)) deadRep.set(sc, c); }
     for (const c of legal) if (dead(c)) cls[c] = deadRep.get(SCORE[cat][c]);
+    ROW_LE[cat] = LE;
     return cls;
   }
+  // ROW_LE[cat](a, b): row b can do everything row a can (b is at least as good)
+  const ROW_LE = [null, null, null];
   const CLASS = [rowClasses(SEQ), rowClasses(MAT), rowClasses(LAD)];
 
   // Extensions of a row: every legal way to fill a non-empty subset of its empty cells.
@@ -201,6 +204,24 @@
     list.improving = list.filter(e => e.gain > 0);
     list.singles = list.filter(e => e.n === 1);
     list.singlesImproving = list.singles.filter(e => e.gain > 0);
+    // "lean" lists for value searches: among extensions that use the same digits, drop
+    // any whose result is beaten by another's (e.g. Matching 1__1 vs 11__), and keep one
+    // of each set of interchangeable results (Ladder 1_2_ = _12_ = ...). The value is
+    // unchanged; only the Hint, which must pick particular cells, uses the full lists.
+    const LE = ROW_LE[cat];
+    const sameNeed = (a, b) => { for (let d = 0; d < 10; d++) if (a.need[d] !== b.need[d]) return false; return true; };
+    list.lean = list.filter((e, i) => {
+      for (let j = 0; j < list.length; j++) {
+        if (j === i) continue;
+        const f = list[j];
+        if (f.n !== e.n || !sameNeed(e, f) || !LE(e.code, f.code)) continue;
+        if (!LE(f.code, e.code) || j < i) return false;   // strictly beaten, or an earlier equal one
+      }
+      return true;
+    });
+    list.improvingLean = list.lean.filter(e => e.gain > 0);
+    list.singlesLean = list.lean.filter(e => e.n === 1);
+    list.singlesImprovingLean = list.singlesLean.filter(e => e.gain > 0);
     EXT[cat].set(code, list);
     return list;
   }
@@ -254,6 +275,11 @@
     this.prune = opts.prune === true;   // experimental: exact but not faster yet (see README)
     this.pruned = 0; this.evaluated = 0; this.cheap = 0;
     this.fast2 = opts.fast2 !== false;
+    // skip bookings whose result another booking with the same digits matches or beats
+    this.dominance = opts.dominance !== false;
+    // exactLoss: false -> the 4th value (points if lost) may come out low; the first three
+    // stay exact and the search can skip much more (for odds displays, not for Hints)
+    this.exactLoss = opts.exactLoss !== false;
     this.l1 = new Map(); this.l2size = 0;
   }
 
@@ -329,11 +355,13 @@
     // finish a row afterwards: e.g. three main books 33_4 into an empty Ladder row,
     // then a free 4 makes 3344. A free book is usable if one is already unlocked and
     // unused, or if booking Sequence could unlock one this round.
+    const leanFree = this.dominance && !track;
     const nFree = final ? freeBooksPossible(rows, st.usedA, st.usedB, classic, cat === SEQ ? maxBook : 0) : 0;
     const onlyScoring = nFree === 0;
     for (let i = 0; i < ROWS; i++) {
       const L = getExt(cat, rows[base + i]);
-      exts.push(!final ? L : onlyScoring ? L.improving : finishable(cat, L, nFree));
+      const lean = this.dominance && !track;
+      exts.push(!final ? (lean ? L.lean : L) : onlyScoring ? (lean ? L.improvingLean : L.improving) : finishable(cat, lean ? L.lean : L, nFree));
     }
     const self = this;
 
@@ -393,7 +421,7 @@
             for (let j = 0; j < i; j++) if (rows[c * ROWS + j] === old) { dup = true; break; }
             if (dup) continue;
             const L = getExt(c, old);
-            const singles = !final || (depth === 0 && otherReady) ? L.singles : L.singlesImproving;
+            const singles = !final || (depth === 0 && otherReady) ? (leanFree ? L.singlesLean : L.singles) : (leanFree ? L.singlesImprovingLean : L.singlesImproving);
             if (fast) {
               const full = c === SEQ ? 15 : 20, wasFull = SCORE[c][old] >= full;
               for (const e of singles) {
@@ -539,6 +567,12 @@
     for (const s of subs) { const t = s.slice().sort((x, y) => x - y); while (t.length < 3) t.push(E); set.add(missCode(t[0], t[1], t[2])); }
     return Int16Array.from(set);
   });
+  // the other way round: for each missing multiset, the rolls that contain it
+  const ROLLS_WITH = (() => {
+    const lists = Array.from({ length: MISS_N }, () => []);
+    ROLL_SUBSETS.forEach((subs, r) => { for (const m of subs) lists[m].push(r); });
+    return lists.map(l => Int16Array.from(l));
+  })();
   // per row code: max copies of each digit any scoring extension needs
   const MAXNEED = [new Map(), new Map(), new Map()];
   function maxNeed(cat, code) {
@@ -619,7 +653,7 @@
     for (let d = 0; d < 10; d++) bk[d] = bank[d];
     for (let i = 0; i < ROWS; i++) { cur[i] = rc[i]; choice[i] = -1; }
     const exts = [];
-    for (let i = 0; i < ROWS; i++) exts.push(getExt(cat, rc[i]).improving);
+    for (let i = 0; i < ROWS; i++) { const X = getExt(cat, rc[i]); exts.push(this.dominance ? X.improvingLean : X.improving); }
     const SC = SCORE[cat];
     let unlock = false;
     const rec = (i, budgetLeft, missN, gain) => {
@@ -666,8 +700,11 @@
     };
     rec(0, budget, 0, 0);
     if (unlock) return null;
-    // Per-roll results bucketed by gain, then suffix sums so that a position with
-    // base score S0 is evaluated in O(1): wins are rolls with gain >= 100 - S0.
+    return packTable(bestGain, bestQuad);
+  };
+  // Per-roll results bucketed by gain, then suffix sums so that a position with
+  // base score S0 is evaluated in O(1): wins are rolls with gain >= 100 - S0.
+  function packTable(bestGain, bestQuad) {
     const W = TB_W.fill(0), WG = TB_WG.fill(0), QE = TB_QE.fill(0), QA = TB_QA.fill(0), LG = TB_LG.fill(0), LQ = TB_LQ.fill(0);
     for (let r = 0; r < ROLLS.length; r++) {
       const subs = ROLL_SUBSETS[r];
@@ -694,6 +731,118 @@
       tab[5 * L + g + 1] = tab[5 * L + g] + LQ[g];
     }
     return tab;
+  }
+
+  // The same table from a list of every scoring booking of these rows (made once per
+  // row set, ignoring the bank): a booking counts for a bank if it is short of at most
+  // three digits. Much faster when one row set meets many banks, as in a round-9
+  // search where the same booked rows come up under every roll.
+  Solver.prototype.bookingList = function (cat, rc, budget, bonus3Before, watchA, watchB) {
+    const fullScore = cat === SEQ ? 15 : 20;
+    const bonus3Possible = !bonus3Before && (cat === SEQ || !this.classic);
+    const SC = SCORE[cat];
+    const cur = Int32Array.from(rc), choice = new Int32Array(ROWS).fill(-1), need = new Int8Array(10);
+    const exts = [];
+    for (let i = 0; i < ROWS; i++) { const X = getExt(cat, rc[i]); exts.push(this.dominance ? X.improvingLean : X.improving); }
+    const needs = [], gains = [], flags = [];
+    const rec = (i, budgetLeft, gain) => {
+      if (i === ROWS) {
+        let g = gain, f = 0;
+        if (bonus3Possible) { let k = 0; for (let j = 0; j < ROWS; j++) if (SC[cur[j]] >= fullScore) k++; if (k === ROWS) g += 5; }
+        if (watchA || watchB) {
+          let a = 0, b = 0;
+          for (let j = 0; j < ROWS; j++) { const sc = SCORE[SEQ][cur[j]]; if (sc >= 10) a++; if (sc >= 15) b++; }
+          if ((watchA && a >= 5) || (watchB && b >= 4)) f |= 2;
+        }
+        if (cat === MAT) for (let j = 0; j < ROWS; j++) if (FILLED[cur[j]] === 4) { f |= 1; break; }
+        for (let d = 0; d < 10; d++) needs.push(need[d]);
+        gains.push(g); flags.push(f);
+        return;
+      }
+      const same = i > 0 && rc[i] === rc[i - 1];
+      const minChoice = same ? choice[i - 1] : -1;
+      if (minChoice === -1) { choice[i] = -1; rec(i + 1, budgetLeft, gain); }
+      const L = exts[i];
+      for (let e = Math.max(0, minChoice); e < L.length; e++) {
+        const x = L[e];
+        if (x.n > budgetLeft) break;
+        for (let d = 0; d < 10; d++) need[d] += x.need[d];
+        cur[i] = x.code; choice[i] = e;
+        rec(i + 1, budgetLeft - x.n, gain + x.gain);
+        cur[i] = rc[i];
+        for (let d = 0; d < 10; d++) need[d] -= x.need[d];
+      }
+      choice[i] = -1;
+    };
+    rec(0, budget, 0);
+    let gmax = 0, anyQuad = 0;
+    for (let i = 0; i < gains.length; i++) { if (gains[i] > gmax) gmax = gains[i]; anyQuad |= flags[i] & 1; }
+    return { n: gains.length, needs: Int8Array.from(needs), gains: Int16Array.from(gains), flags: Uint8Array.from(flags), gmax, anyQuad };
+  };
+  // does any booking in the list unlock a free book? (then no skipping: the caller must see null)
+  function hasUnlock(q) { if (q.unl === undefined) { q.unl = false; for (let i = 0; i < q.n; i++) if (q.flags[i] & 2) { q.unl = true; break; } } return q.unl; }
+  // Fill TB_bestGain / TB_bestQuad from a booking list; false if a free book could be unlocked.
+  const GL_used = new Int16Array(MISS_N + 1);   // missing codes set by the last gainsFromList (count first)
+  function gainsFromList(q, bank) {
+    const bestGain = TB_bestGain.fill(-1), bestQuad = TB_bestQuad.fill(-1);
+    const { needs, gains, flags } = q;
+    let nUsed = 0;
+    for (let i = 0, o = 0; i < q.n; i++, o += 10) {
+      let short = 0;
+      for (let d = 0; d < 10; d++) { const x = needs[o + d] - bank[d]; if (x > 0) short += x; }
+      if (short > 3) continue;
+      if (flags[i] & 2) return false;
+      let m = 0, k = 0;
+      for (let d = 0; d < 10; d++) for (let x = needs[o + d] - bank[d]; x > 0; x--) { m = m * 11 + d; k++; }
+      for (; k < 3; k++) m = m * 11 + E;
+      const g = gains[i];
+      if (bestGain[m] < 0) GL_used[++nUsed] = m;
+      if (g > bestGain[m]) bestGain[m] = g;
+      if ((flags[i] & 1) && g > bestQuad[m]) bestQuad[m] = g;
+    }
+    GL_used[0] = nUsed;
+    return true;
+  }
+  const VL_G = new Int16Array(ROLLS.length), VL_GQ = new Int16Array(ROLLS.length);
+  // The category's value at base score S0 straight from a booking list (no table kept),
+  // written into v as [win, pointsIfWin, quad, pointsIfLose]; false if a free book could
+  // be unlocked.
+  function valueFromList(q, bank, S0, q0, v) {
+    if (!gainsFromList(q, bank)) return false;
+    const bestGain = TB_bestGain, bestQuad = TB_bestQuad;
+    // best gain per roll, pushed from the few missing multisets that occur
+    const Gr = VL_G.fill(-1), GQr = VL_GQ.fill(-1);
+    for (let u = 1; u <= GL_used[0]; u++) {
+      const m = GL_used[u], g = bestGain[m], gq = bestQuad[m], rl = ROLLS_WITH[m];
+      for (let k = 0; k < rl.length; k++) { const r = rl[k]; if (g > Gr[r]) Gr[r] = g; if (gq > GQr[r]) GQr[r] = gq; }
+    }
+    let w = 0, p = 0, qq = 0, l = 0;
+    for (let r = 0; r < ROLLS.length; r++) {
+      const G = Gr[r], GQ = GQr[r];
+      const wt = ROLLS[r].w;
+      if (S0 + G >= 100) { w += wt; p += wt * (S0 + G); if (q0 || GQ === G) qq += wt; }
+      else { if (q0 || GQ >= 0) qq += wt; l += wt * (S0 + (q0 || GQ < 0 ? G : GQ)); }
+    }
+    v[0] = w; v[1] = p; v[2] = qq; v[3] = l;
+    return true;
+  }
+  Solver.prototype.tableFromList = function (q, bank) {
+    this.tablesBuilt++;
+    const bestGain = TB_bestGain.fill(-1), bestQuad = TB_bestQuad.fill(-1);
+    const { needs, gains, flags } = q;
+    for (let i = 0, o = 0; i < q.n; i++, o += 10) {
+      let short = 0;
+      for (let d = 0; d < 10; d++) { const x = needs[o + d] - bank[d]; if (x > 0) short += x; }
+      if (short > 3) continue;
+      if (flags[i] & 2) return null;          // a free book could be unlocked
+      let m = 0, k = 0;
+      for (let d = 0; d < 10; d++) for (let x = needs[o + d] - bank[d]; x > 0; x--) { m = m * 11 + d; k++; }
+      for (; k < 3; k++) m = m * 11 + E;
+      const g = gains[i];
+      if (g > bestGain[m]) bestGain[m] = g;
+      if ((flags[i] & 1) && g > bestQuad[m]) bestQuad[m] = g;
+    }
+    return packTable(bestGain, bestQuad);
   };
 
   // Can a Bonus II free book possibly be used this round when choosing `cat`?
@@ -964,7 +1113,12 @@
   // the relevant bank digits packed into one number.
   const POW5 = [1, 5, 25, 125, 625, 3125, 15625, 78125, 390625, 1953125];
   const FT_bank = new Int8Array(10);
-  Solver.prototype.fastTable = function (c, rows, bk, uA, uB, b3, n10) {
+  // With S0, q0 and vout given, a row set seen with many banks is evaluated straight
+  // into vout (returns DIRECT) instead of building and keeping a table.
+  const DIRECT = new Int32Array(0), SKIP = new Int32Array(0);
+  // alpha (optional): a value this category need not beat. If even its best possible
+  // outcome (every roll getting the row set's biggest gain) cannot beat it, return SKIP.
+  Solver.prototype.fastTable = function (c, rows, bk, uA, uB, b3, n10, S0, q0, vout, alpha) {
     const base = c * ROWS;
     const budget = c === SEQ && n10 >= 1 ? 4 : 3;
     const watchA = c === SEQ && uA === 0, watchB = c === SEQ && !this.classic && uB === 0;
@@ -986,16 +1140,34 @@
         for (let d = 0; d < 10; d++) cap[d] += m[d];
       }
       for (let d = 0; d < 10; d++) if (cap[d] > budget) cap[d] = budget;
-      e = { cap, rc, m: new Map() };
+      e = { cap, rc, m: new Map(), misses: 0, q: null };
       this.l1.set(k1, e);
     }
     const cap = e.cap;
     let key = 0;
     for (let d = 0; d < 10; d++) key += (bk[d] < cap[d] ? bk[d] : cap[d]) * POW5[d];
     let tab = e.m.get(key);
-    if (tab === undefined) {
+    if (tab === undefined || tab === DIRECT) {
       for (let d = 0; d < 10; d++) FT_bank[d] = bk[d] < cap[d] ? bk[d] : cap[d];
-      tab = this.buildTable(c, e.rc, budget, FT_bank, b3, watchA, watchB);
+      // a row set that keeps coming back with new banks gets its booking list
+      if (!e.q && ++e.misses > 2) e.q = this.bookingList(c, e.rc, budget, b3, watchA, watchB);
+      if (e.q && alpha && alpha[0] >= 0 && !(e.q.flags.length && hasUnlock(e.q))) {
+        const top = S0 + e.q.gmax;
+        const ub0 = top >= 100 ? 1000 : 0;
+        let beat;
+        if (ub0 !== alpha[0]) beat = ub0 > alpha[0];
+        else if (ub0) beat = 1000 * top > alpha[1] || (1000 * top === alpha[1] && (this.exactLoss ? 1000 >= alpha[2] : 1000 > alpha[2]));
+        else { const uq = q0 || e.q.anyQuad ? 1000 : 0; beat = uq > alpha[2] || (uq === alpha[2] && this.exactLoss && 1000 * top > alpha[3]); }
+        if (!beat) return SKIP;
+      }
+      // first time this bank shows up: evaluate directly; keep a table only if it comes back
+      if (e.q && vout && tab === undefined) {
+        this.tablesBuilt++;
+        if (!valueFromList(e.q, FT_bank, S0, q0, vout)) { e.m.set(key, null); return null; }
+        e.m.set(key, DIRECT);
+        return DIRECT;
+      }
+      tab = e.q ? this.tableFromList(e.q, FT_bank) : this.buildTable(c, e.rc, budget, FT_bank, b3, watchA, watchB);
       e.m.set(key, tab);
       if (++this.l2size > this.maxTables) { this.l1.clear(); this.l2size = 0; }
     }
@@ -1003,7 +1175,7 @@
   };
   // Value of a position at the start of round 10 (same result as finalValue).
   // Writes [win, points, quad] into `out`.
-  Solver.prototype.v1Fast = function (rows, bk, uA, uB, out) {
+  Solver.prototype.v1Fast = function (rows, bk, uA, uB, out, alpha) {
     const classic = this.classic;
     let S0 = 0, n10 = 0, n15 = 0, m20 = 0, l20 = 0;
     for (let i = 0; i < ROWS; i++) {
@@ -1017,8 +1189,9 @@
     const freeNow = (uA === 0 && n10 >= 5) || (!classic && uB === 0 && n15 >= 4);
     const t = Math.max(0, Math.min(GMAX + 1, 100 - S0)), L = GMAX + 2;
     const tabs = this.v1tabs || (this.v1tabs = [null, null, null]);
+    const vals = this.v1vals || (this.v1vals = [new Float64Array(4), new Float64Array(4), new Float64Array(4)]);
     let needFull = freeNow;
-    for (let c = 0; c < 3 && !needFull; c++) { tabs[c] = this.fastTable(c, rows, bk, uA, uB, b3, n10); if (!tabs[c]) needFull = true; }
+    for (let c = 0; c < 3 && !needFull; c++) { tabs[c] = this.fastTable(c, rows, bk, uA, uB, b3, n10, S0, q0, vals[c], alpha); if (!tabs[c]) needFull = true; }
     if (needFull) {
       // a free book may be in play: whole-position tables are costly, so cache by position
       const key = this.key(rows, bk, uA, uB, 1);
@@ -1028,7 +1201,11 @@
         v = null;
         for (let c = 0; c < 3; c++) {
           const tab = freeNow ? null : this.fastTable(c, rows, bk, uA, uB, b3, n10);
-          const cv = tab ? evalTab(tab, S0, q0) : this.fullCategoryValue(st, c);
+          let cv;
+          if (tab) cv = evalTab(tab, S0, q0);
+          else {
+            cv = this.fullCategoryValue(st, c);
+          }
           if (v === null || cmp(cv, v) > 0) v = cv;
         }
         if (this.memo[1].size >= this.maxMemo) this.memo[1].clear();
@@ -1041,9 +1218,13 @@
     const qo = (q0 ? 4 : 5) * L;
     for (let c = 0; c < 3; c++) {
       const tab = tabs[c];
-      const w = tab[t], p = S0 * w + tab[L + t], q = q0 ? 1000 : tab[2 * L + t] + tab[3 * L + t], l = S0 * (1000 - w) + tab[qo + t];
+      if (tab === SKIP) continue;
+      let w, p, q, l;
+      if (tab === DIRECT) { const v = vals[c]; w = v[0]; p = v[1]; q = v[2]; l = v[3]; }
+      else { w = tab[t]; p = S0 * w + tab[L + t]; q = q0 ? 1000 : tab[2 * L + t] + tab[3 * L + t]; l = S0 * (1000 - w) + tab[qo + t]; }
       if (w > bw || (w === bw && (p > bp || (p === bp && (q > bq || (q === bq && l > bl)))))) { bw = w; bp = p; bq = q; bl = l; }
     }
+    if (bw < 0) { out[0] = -1; out[1] = 0; out[2] = 0; out[3] = 0; return; }   // all skipped: cannot beat alpha
     out[0] = bw; out[1] = bp; out[2] = bq; out[3] = bl;
   };
   // One category's round-10 value through the whole-position table (free books).
@@ -1055,8 +1236,10 @@
   Solver.prototype.bestAfterRollFast = function (st, c9, bank) {
     const out = this.v1out || (this.v1out = new Float64Array(4));
     let bw = -1, bp = 0, bq = 0, bl = 0;
+    const alpha = this.alphaBuf || (this.alphaBuf = new Float64Array(4));
     this.forEachBooking(st, c9, bank, false, false, (rows, bk, uA, uB) => {
-      this.v1Fast(rows, bk, uA, uB, out);
+      alpha[0] = bw; alpha[1] = bp; alpha[2] = bq; alpha[3] = bl;
+      this.v1Fast(rows, bk, uA, uB, out, bw >= 0 ? alpha : null);
       this.nodes++;
       if (out[0] > bw || (out[0] === bw && (out[1] > bp || (out[1] === bp && (out[2] > bq || (out[2] === bq && out[3] > bl)))))) { bw = out[0]; bp = out[1]; bq = out[2]; bl = out[3]; }
     });
@@ -1112,6 +1295,7 @@
   };
 
   function cmp(a, b) { return a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]; }
+  function cmp3(a, b) { return a[0] - b[0] || a[1] - b[1] || a[2] - b[2]; }
 
   // ---------- top-level API ----------
   // Start of round 10: which of the 220 rolls win (reach 100) for category `cat`.
@@ -1247,14 +1431,37 @@
     }
     return ub;
   };
-  // Per category and roll bounds for a round-9 start position.
-  Solver.prototype.positionBound = function (st) {
+  Solver.prototype.freeState = function (st) {
     let n10 = 0, n15 = 0;
     for (let i = 0; i < ROWS; i++) { const sc = SCORE[SEQ][st.rows[i]]; if (sc >= 10) n10++; if (sc >= 15) n15++; }
-    const free = {
+    return {
       reach: bonusReachable(st, this.classic),
       now: (st.usedA === 0 && n10 >= 5) || (!this.classic && st.usedB === 0 && n15 >= 4),
     };
+  };
+  // A quick, looser bound for a round-9 start position, without going through the
+  // rolls: a bank holding three more of every digit contains the bank after any roll,
+  // and a bigger bank never does worse, so rollBound with it bounds every roll (and an
+  // average of values each at most U is at most U).
+  // Same shape as positionBound ({ per, tot, ub }, every roll given its category's bound).
+  Solver.prototype.quickBound = function (st) {
+    const free = this.freeState(st);
+    const bb = new Int8Array(10);
+    for (let d = 0; d < 10; d++) bb[d] = st.bank[d] + 3;
+    const per = [], tot = [];
+    let ub = null;
+    for (let c = 0; c < 3; c++) {
+      const u = this.rollBound(st, c, bb, free);
+      per.push(ROLLS.map(() => u));
+      const t = u.map(x => x * 1000);    // the 220 roll weights add up to 1000
+      tot.push(t);
+      if (ub === null || cmp(t, ub) > 0) ub = t;
+    }
+    return { per, tot, ub, quick: true };
+  };
+  // Per category and roll bounds for a round-9 start position.
+  Solver.prototype.positionBound = function (st) {
+    const free = this.freeState(st);
     const per = [[], [], []], tot = [];
     const bb = new Int8Array(10);
     for (let c = 0; c < 3; c++) {
@@ -1323,27 +1530,53 @@
     const limit = (opts && opts.timeLimit) || Infinity;
     this.deadline = t0 + limit;
     const groups = this.bookingGroups(st, cat, bankList, 3);
+    // opts.bounds: 'roll' (per-roll bounds for all, the default), 'quick' (only the
+    // roll-free bound) or 'lazy' (quick bounds to order and skip; per-roll bounds
+    // worked out only for positions that still have to be solved)
+    const mode = (opts && opts.bounds) || 'roll';
     for (const g of groups) {
-      g.bound = this.positionBound(g.state);
+      g.bound = mode === 'roll' ? this.positionBound(g.state) : this.quickBound(g.state);
       if (Date.now() > this.deadline) return { timedOut: true, stats: { positions: groups.length, solved: 0, ms: Date.now() - t0 } };
     }
+    const refine = g => { if (mode === 'lazy' && g.bound.quick) g.bound = this.positionBound(g.state); };
     const tBound = Date.now() - t0;
     groups.sort((a, b) => cmp(b.bound.ub, a.bound.ub) || (tieBetter(a.cand, b.cand) ? -1 : tieBetter(b.cand, a.cand) ? 1 : 0));
-    let best = null, solved = 0;
+    // Phase 1: the first three values only (win, points if win, Quad), which lets the
+    // search skip far more; keep every position that ties for the best on those.
+    const exactSaved = this.exactLoss;
+    this.exactLoss = false;
+    let best3 = null, tied = [], solved = 0;
+    const out = (extra) => { this.exactLoss = exactSaved; return { timedOut: true, stats: { positions: groups.length, solved, boundMs: tBound, ms: Date.now() - t0, ...extra } }; };
     for (const g of groups) {
-      const beats = v => best === null || cmp(v, best.v) > 0 || (cmp(v, best.v) === 0 && tieBetter(g.cand, best.cand));
-      if (!beats(g.bound.ub)) continue;
+      if (best3 !== null && cmp3(g.bound.ub, best3) < 0) continue;
+      refine(g);
+      if (best3 !== null && cmp3(g.bound.ub, best3) < 0) continue;
+      const beats = v => best3 === null || cmp3(v, best3) >= 0;
       solved++;
       const r0 = this.rollsSolved || 0, tc = Date.now();
       const v = this.valueWithCutoff(g.state, g.bound, beats);
-      if (v === undefined) return { timedOut: true, stats: { positions: groups.length, solved, boundMs: tBound, ms: Date.now() - t0 } };
+      if (v === undefined) return out();
+      if (v !== null) {
+        const c = best3 === null ? 1 : cmp3(v, best3);
+        if (c > 0) { best3 = v; tied = [g]; } else if (c === 0) tied.push(g);
+      }
+      if (this.trace) this.trace({ index: solved, of: groups.length, bound: g.bound.ub, value: v, best: best3, rolls: (this.rollsSolved || 0) - r0, ms: Date.now() - tc });
+    }
+    this.exactLoss = exactSaved;
+    // Phase 2: exact values (points if lost too) for the tied ones, then the booking tie-breaks.
+    // Same branch and bound as before, now on all four values, among the tied ones only.
+    let best = null;
+    for (const g of tied) {
+      const beats = v => best === null || cmp(v, best.v) > 0 || (cmp(v, best.v) === 0 && tieBetter(g.cand, best.cand));
+      if (!beats(g.bound.ub)) continue;
+      const v = this.valueWithCutoff(g.state, g.bound, beats);
+      if (v === undefined) return out({ tied: tied.length });
       if (v !== null) best = { v, cand: g.cand };
-      if (this.trace) this.trace({ index: solved, of: groups.length, bound: g.bound.ub, value: v, best: best.v, rolls: (this.rollsSolved || 0) - r0, ms: Date.now() - tc });
     }
     return {
       placements: best.cand.placements.map(p => ({ ...p, category: CAT_NAMES[p.cat] })),
       value: best.v, ...describe(best.v, 1e6),
-      stats: { positions: groups.length, solved, boundMs: tBound, ms: Date.now() - t0 },
+      stats: { positions: groups.length, solved, tied: tied.length, boundMs: tBound, ms: Date.now() - t0 },
     };
   };
 
@@ -1446,7 +1679,9 @@
   function positionKey(st, roundsLeft, classic) {
     return (classic ? 'c' : 'm') + roundsLeft + Solver.prototype.key.call(null, st.rows, st.bank, st.usedA, st.usedB, roundsLeft);
   }
-  const api = { Solver, fromGame, summarize, makeState, enc, dec, E, SEQ, MAT, LAD, CAT_NAMES, ROLLS, SCORE, LEGAL, CANON, CANON_LAD, CLASS, getExt, terminalScore, hasQuad, positionKey };
+  const api = { Solver, fromGame, summarize, makeState, enc, dec, E, SEQ, MAT, LAD, CAT_NAMES, ROLLS, SCORE, LEGAL, CANON, CANON_LAD, CLASS, ROW_LE, getExt, terminalScore, hasQuad, positionKey,
+    // for running the round-8 search across workers (see bestBookingBnB for the order of work)
+    compareValues: cmp, compareFirst3: cmp3, tieBreakBetter: tieBetter, describeValue: describe };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SimiliSolver = api;
 })(typeof self !== 'undefined' ? self : this);
