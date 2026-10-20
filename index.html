@@ -1699,6 +1699,15 @@ function placementsToLax(grids, placements) {
 // Round 9 preview of the booking you end Round 8 with, then the Round 9 odds, or two
 // bookings that give functionally identical boards).
 const previewResultCache = new Map();
+// functionally identical boards (rows in any order, interchangeable rows such as 123_/_321,
+// Matching 11__/_11_, Ladder 1_2_/_12_) share a result
+function previewCacheKey(state, roundsLeft, classicMode) {
+  return SimiliSolver.positionKey ? SimiliSolver.positionKey(state, roundsLeft, !!classicMode) : JSON.stringify([Array.from(state.rows), Array.from(state.bank), state.usedA, state.usedB, roundsLeft, !!classicMode]);
+}
+// a finished result for this board, if there is one (no computing)
+function peekPreview(state, roundsLeft, classicMode) {
+  return previewResultCache.get(previewCacheKey(state, roundsLeft, classicMode)) || null;
+}
 function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
   let cancelled = false;
   const workers = [];
@@ -1706,9 +1715,7 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
     cancelled = true;
     workers.forEach(w => w.terminate());
   };
-  // functionally identical boards (rows in any order, interchangeable rows such as 123_/_321,
-  // Matching 11__/_11_, Ladder 1_2_/_12_) share a result
-  const cacheKey = SimiliSolver.positionKey ? SimiliSolver.positionKey(state, roundsLeft, !!classicMode) : JSON.stringify([Array.from(state.rows), Array.from(state.bank), state.usedA, state.usedB, roundsLeft, !!classicMode]);
+  const cacheKey = previewCacheKey(state, roundsLeft, classicMode);
   const cached = previewResultCache.get(cacheKey);
   if (cached) {
     setTimeout(() => {
@@ -1876,9 +1883,17 @@ function NextRoundPreview({
     cancelRef.current = null;
     setJob(null);
   };
-  // a booking previewed before shows its result again straight away
+  // a board solved before (this booking, an equivalent one, or in an earlier preview)
+  // shows its result again straight away
   useEffect(() => {
-    const seen = seenRef.current.get(key);
+    let seen = seenRef.current.get(key);
+    if (!seen && typeof SimiliSolver !== 'undefined') {
+      const {
+        state
+      } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(ps) : ps, bank.map(b => b.digit));
+      seen = peekPreview(state, roundsLeft, classicMode);
+      if (seen) seenRef.current.set(key, seen);
+    }
     if (seen) setResult({
       key,
       r: seen
@@ -3531,7 +3546,8 @@ window.Simili = function Simili() {
       selectedBankIndices: []
     };
     for (const pl of placements) ns = bookPlacement(ns, pl);
-    const note = best.placements.length === 0 ? 'Best play: book nothing' : round === TOTAL_ROUNDS - 1 ? best.winPct === 100 ? `Best play wins with ${best.pointsIfWinText}` : 'No booking reaches 100' : '';
+    // a certain loss says so first; otherwise an empty booking is pointed out
+    const note = round === TOTAL_ROUNDS - 1 && best.winPct !== 100 ? 'No booking reaches 100' : best.placements.length === 0 ? 'Best play: book nothing' : round === TOTAL_ROUNDS - 1 ? `Best play wins with ${best.pointsIfWinText}` : '';
     const cells = placements.map(pl => `${pl.category}-${pl.row}-${pl.col}`);
     updatePlayerFn(playerIdx, () => ({
       ...ns,
