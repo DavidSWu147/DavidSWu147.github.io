@@ -1744,7 +1744,8 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
     r0,
     r1: Math.min(N, r0 + CHUNK)
   });
-  const sums = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  // one value per category: [win, points if win, quad, points if lose], summed over roll slices
+  const sums = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
   let next = 0,
     done = 0;
   const msg = t => ({
@@ -1759,7 +1760,7 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
     r1: t.r1
   });
   const finishTask = (t, v) => {
-    for (let i = 0; i < 3; i++) sums[t.cat][i] += v[i];
+    for (let i = 0; i < sums[t.cat].length; i++) sums[t.cat][i] += v[i] || 0;
     done++;
     onProgress(done / tasks.length);
     if (done === tasks.length) {
@@ -3546,8 +3547,8 @@ window.Simili = function Simili() {
       selectedBankIndices: []
     };
     for (const pl of placements) ns = bookPlacement(ns, pl);
-    // a certain loss says so first; otherwise an empty booking is pointed out
-    const note = round === TOTAL_ROUNDS - 1 && best.winPct !== 100 ? 'No booking reaches 100' : best.placements.length === 0 ? 'Best play: book nothing' : round === TOTAL_ROUNDS - 1 ? `Best play wins with ${best.pointsIfWinText}` : '';
+    // Round 10 always gives the outcome; Round 9 points out an empty booking
+    const note = round === TOTAL_ROUNDS - 1 ? best.winPct === 100 ? `Best play wins with ${best.pointsIfWinText}` : 'No booking reaches 100' : best.placements.length === 0 ? 'Best play: book nothing' : '';
     const cells = placements.map(pl => `${pl.category}-${pl.row}-${pl.col}`);
     updatePlayerFn(playerIdx, () => ({
       ...ns,
