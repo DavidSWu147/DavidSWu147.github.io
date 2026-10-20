@@ -1822,13 +1822,22 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
 }
 
 // --- Round 8 Hint: the exact round-8 search (see bestBookingBnB in simili-solver.js,
-// bounds: 'lazy'), spread over Web Workers. Phase 0: a quick upper bound for every
-// position the booking can lead to. Phase 1: positions solved best bound first on
-// win / points if win / Quad, skipping any whose bound cannot reach the best so far
-// (a worker works out the tighter per-roll bounds just before solving). Phase 2:
-// positions tied with the best, on all four values, then the booking tie-breaks.
-// Returns cancel().
-function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
+// bounds: 'lazy', order: 'sample'), spread over Web Workers. Phase 0: for every position
+// the booking can lead to, a quick upper bound and a cheap estimate (Round 9 odds on
+// 1 roll in 20, then 1 in 5 for the top 96; only with R8_SCREEN_MIN positions or more). Phase 1: positions solved
+// in order of that estimate (else of the bound) on win / points if win / Quad, skipping any whose bound cannot reach the best so far (a worker works
+// out the tighter per-roll bounds just before solving). Once the SHORTLIST likeliest
+// are done, onSoFar(best, { checked, total }) reports the best so far. Phase 2:
+// positions tied with the best, on all four values and the end-of-round score.
+// Phase 3: the other round-9 categories, then the booking tie-breaks. Returns cancel().
+// Only worth it for the big decisions (mostly Sequence): smaller ones are quicker in bound order.
+// The top R8_REFINE by that estimate are estimated again from 1 roll in R8_FINE.
+const R8_SHORTLIST = 24,
+  R8_SAMPLE = 20,
+  R8_SCREEN_MIN = 300,
+  R8_REFINE = 96,
+  R8_FINE = 5;
+function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, onDone) {
   const S = SimiliSolver,
     cmp = S.compareValues,
     cmp3 = S.compareFirst3,
@@ -1852,7 +1861,35 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
     best3 = null,
     tied = [],
     best = null,
-    ties = [];
+    ties = [],
+    refineList = [],
+    refined = 0;
+  const useScreen = n >= R8_SCREEN_MIN;
+  let shortDone = 0,
+    soFarSent = false;
+  // report the best so far: once the first R8_SHORTLIST positions (in estimate order) are
+  // finished or skipped, then whenever it improves
+  const shortlistTick = (g, improved) => {
+    if (!useScreen || tied.length === 0) return;
+    if (!soFarSent) {
+      if (g.oi >= R8_SHORTLIST || ++shortDone < R8_SHORTLIST) return;
+      soFarSent = true;
+    } else if (!improved) return;
+    let b = tied[0];
+    for (const x of tied) if (tieBetter(x.cand, b.cand)) b = x;
+    const c = b.cand;
+    onSoFar({
+      placements: c.placements.map(p => ({
+        ...p,
+        category: S.CAT_NAMES[p.cat]
+      })),
+      value: best3,
+      ...S.describeValue(best3, 1e6)
+    }, {
+      checked: processed,
+      total: n
+    });
+  };
   const base = g => ({
     rows: Array.from(g.state.rows),
     bank: Array.from(g.state.bank),
@@ -1860,7 +1897,10 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
     usedB: g.state.usedB,
     classic: !!classicMode
   });
-  const report = () => onProgress(phase === 0 ? 0.05 * boundsDone / n : phase === 1 ? 0.05 + 0.85 * processed / n : phase === 2 ? 0.9 + 0.08 * (tied.length ? tiedDone / tied.length : 1) : 0.98 + 0.02 * (ties.length ? altDone / ties.length : 1));
+  // with the estimates, estimating everything is a large share of the time to the first answer
+  const p0 = useScreen ? 0.25 : 0.1,
+    p1 = useScreen ? 0.3 : 0.1;
+  const report = () => onProgress(phase === 0 ? p0 * boundsDone / n : phase === 0.5 ? p0 + (p1 - p0) * refined / refineList.length : phase === 1 ? p1 + (0.9 - p1) * processed / n : phase === 2 ? 0.9 + 0.08 * (tied.length ? tiedDone / tied.length : 1) : 0.98 + 0.02 * (ties.length ? altDone / ties.length : 1));
   // the next piece of work, or null if the current phase has nothing left to hand out
   const nextTask = () => {
     if (phase === 0) {
@@ -1869,11 +1909,28 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
       return {
         msg: {
           ...base(g),
-          type: 'bound'
+          type: 'bound',
+          sample: useScreen ? R8_SAMPLE : 0
         },
         done: r => {
           g.bound = r.bound;
+          g.screen = r.screen;
           boundsDone++;
+        }
+      };
+    }
+    if (phase === 0.5) {
+      if (nextIdx >= refineList.length) return null;
+      const g = refineList[nextIdx++];
+      return {
+        msg: {
+          ...base(g),
+          type: 'screen',
+          sample: R8_FINE
+        },
+        done: r => {
+          g.fine = r.screen;
+          refined++;
         }
       };
     }
@@ -1882,6 +1939,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
         const g = order[nextIdx++];
         if (best3 !== null && cmp3(g.bound.ub, best3) < 0) {
           processed++;
+          shortlistTick(g, false);
           continue;
         }
         return {
@@ -1895,12 +1953,16 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
           done: r => {
             processed++;
             if (r.bound) g.bound = r.bound;
-            if (r.v === null) return;
-            const c = best3 === null ? 1 : cmp3(r.v, best3);
-            if (c > 0) {
-              best3 = r.v;
-              tied = [g];
-            } else if (c === 0) tied.push(g);
+            let improved = false;
+            if (r.v !== null) {
+              const c = best3 === null ? 1 : cmp3(r.v, best3);
+              if (c > 0) {
+                best3 = r.v;
+                tied = [g];
+                improved = true;
+              } else if (c === 0) tied.push(g);
+            }
+            shortlistTick(g, improved);
           }
         };
       }
@@ -1957,10 +2019,20 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
   };
   // move on when a phase has handed out everything and all its answers are back
   const advance = () => {
-    if (phase === 0) {
+    const sortBy = (list, key) => list.sort((a, b) => cmp3(key(b), key(a)) || (tieBetter(a.cand, b.cand) ? -1 : tieBetter(b.cand, a.cand) ? 1 : 0));
+    if (phase === 0 && useScreen) {
+      // a finer estimate for the most promising ones
+      phase = 0.5;
+      nextIdx = 0;
+      order = sortBy(groups.slice(), g => g.screen);
+      refineList = order.slice(0, R8_REFINE);
+    } else if (phase === 0 || phase === 0.5) {
+      order = phase === 0 ? sortBy(groups.slice(), g => g.bound.ub) : sortBy(refineList.slice(), g => g.fine).concat(order.slice(refineList.length));
       phase = 1;
       nextIdx = 0;
-      order = groups.slice().sort((a, b) => cmp(b.bound.ub, a.bound.ub) || (tieBetter(a.cand, b.cand) ? -1 : tieBetter(b.cand, a.cand) ? 1 : 0));
+      order.forEach((g, i) => {
+        g.oi = i;
+      });
     } else if (phase === 1) {
       phase = 2;
       nextIdx = 0;
@@ -2020,10 +2092,14 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
     const exec = m => {
       const st = S.makeState(m.rows, m.bank, m.usedA, m.usedB);
       if (m.type === 'bound') return {
-        bound: solver.quickBound(st)
+        bound: solver.quickBound(st),
+        screen: m.sample ? solver.screenValue(st, 'sample', m.sample) : null
       };
       if (m.type === 'alt') return {
         alt: solver.altValues(st, 2)
+      };
+      if (m.type === 'screen') return {
+        screen: solver.screenValue(st, 'sample', m.sample)
       };
       const beats = m.phase === 1 ? v => m.best === null || cmp3(v, m.best) >= 0 : v => m.best === null || cmp(v, m.best) > 0 || cmp(v, m.best) === 0 && m.tieWins;
       const bound = m.bound || solver.positionBound(st);
@@ -2067,11 +2143,15 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onDone) {
     processed = 0;
     tiedDone = 0;
     altDone = 0;
+    shortDone = 0;
+    soFarSent = false;
     best3 = null;
     tied = [];
     best = null;
     order = [];
     ties = [];
+    refineList = [];
+    refined = 0;
     runOnMainThread();
   };
   const nWorkers = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1));
@@ -2703,7 +2783,7 @@ function PlayerSheet({
         }
       }, "+", rowScore));
     }));
-  }))), (phase === 'book' || phase === 'endgame-bonus') && !ps.roundDone && /*#__PURE__*/React.createElement("div", {
+  }))), (phase === 'book' || phase === 'endgame-bonus' && ps.bonusBookPhase) && !ps.roundDone && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
       paddingTop: 8,
@@ -2784,15 +2864,15 @@ function PlayerSheet({
       e.target.style.borderColor = '#ccc';
     }
   }, "\u21A9 Undo"), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && (() => {
-    // Round 8: the hint is worked out in the background (gold progress bar);
-    // clicking again while it runs stops it, and a finished one is booked on click
-    const job = !ps.hint && r8Job && !r8Job.result ? r8Job : null;
+    // Round 8: the hint is worked out in the background (gold progress bar). Before
+    // anything is found a click stops it; after that a click books the best so far
+    const job = r8Job && !r8Job.final ? r8Job : null;
     const ready = !ps.hint && r8Job && r8Job.result && r8Job.stale;
     const pct = job ? Math.round((job.progress || 0) * 100) : 0;
     const secs = job ? Math.round((Date.now() - job.started) / 1000) : 0;
     return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
       onClick: () => onHint(playerIdx),
-      title: ps.hint ? 'Take back the suggested booking' : job ? 'Stop working out the hint' : 'Book the best play for this round',
+      title: ps.hint ? 'Take back the suggested booking' : job && job.result ? 'Book the best play found so far' : job ? 'Stop working out the hint' : 'Book the best play for this round',
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 12,
@@ -3573,7 +3653,9 @@ window.Simili = function Simili() {
   const [round10WinChances, setRound10WinChances] = useState(null);
   const [round9Start, setRound9Start] = useState(null); // solver positions at the start of Round 9, per player
   const [round9Odds, setRound9Odds] = useState(null); // per player: { progress, result }
-  const [r8Jobs, setR8Jobs] = useState([]); // Round 8 hint per player: { key, started, progress, result, stale }
+  const [r8Jobs, setR8Jobs] = useState([]);
+  const r8JobsRef = useRef(r8Jobs);
+  r8JobsRef.current = r8Jobs; // Round 8 hint per player: { key, started, progress, result, stale }
   const r8CancelRef = useRef([]);
   const setR8Job = (i, fn) => setR8Jobs(js => {
     const n = [...js];
@@ -3868,6 +3950,11 @@ window.Simili = function Simili() {
         selectedBankIndices: [],
         hint: null
       }));
+      // a Round 8 search still going on stops booking its finds by itself
+      if (p.hint.r8) setR8Job(playerIdx, j => j && j.key === p.hint.r8 ? {
+        ...j,
+        declined: true
+      } : j);
       return;
     }
     const start = roundStartOf(p);
@@ -3880,8 +3967,14 @@ window.Simili = function Simili() {
       // Round 8: the exact search can take a while, so it runs on the workers
       const key = JSON.stringify([start.grids, start.bankUsed, start.chosenCategory, bank.length]);
       const job = r8Jobs[playerIdx];
+      // a result so far (or the final one) is booked on click, even while the search goes on
       if (job && job.key === key && job.result) {
         applyHint(playerIdx, start, job.result);
+        setR8Job(playerIdx, j => j && j.key === key ? {
+          ...j,
+          stale: false,
+          declined: false
+        } : j);
         return;
       }
       if (job && job.key === key && r8CancelRef.current[playerIdx]) {
@@ -3895,23 +3988,58 @@ window.Simili = function Simili() {
         started: Date.now(),
         progress: 0,
         result: null,
+        final: false,
         stale: false
       }));
+      const samePlay = (a, b) => JSON.stringify(a.placements.map(x => [x.cat, x.row, x.col, x.digit, x.bonus || null])) === JSON.stringify(b.placements.map(x => [x.cat, x.row, x.col, x.digit, x.bonus || null]));
+      // book `best` if the sheet shows this hint's earlier result or nothing booked by hand yet;
+      // otherwise keep it for a click
+      const deliver = (best, final) => {
+        const q = playersRef.current[playerIdx];
+        const jobNow = r8JobsRef.current[playerIdx] || {};
+        const prev = jobNow.result;
+        const showingPrev = q && q.hint && q.hint.r8 === key;
+        const untouched = q && !q.roundDone && (showingPrev || q.undoStack.length === 0 && !q.hint && !jobNow.declined);
+        if (showingPrev && prev && samePlay(prev, best)) {
+          updatePlayerFn(playerIdx, x => x.hint && x.hint.r8 === key ? {
+            ...x,
+            hint: {
+              ...x.hint,
+              note: best.note
+            }
+          } : x);
+        } else if (untouched) {
+          applyHint(playerIdx, start, best);
+        }
+        setR8Job(playerIdx, j => j && j.key === key ? {
+          ...j,
+          progress: final ? 1 : j.progress,
+          result: best,
+          final,
+          stale: !untouched
+        } : j);
+      };
       r8CancelRef.current[playerIdx] = startRound8Job(state, cat, bankList, classicMode, pr => setR8Job(playerIdx, j => j && j.key === key ? {
         ...j,
         progress: pr
-      } : j), best => {
+      } : j), (best, info) => {
+        // the likeliest plays are all checked: book the best so far, keep checking the rest
+        const n = info.total.toLocaleString('en-US');
+        deliver({
+          ...best,
+          note: `Best so far · ${info.checked} of ${n} plays checked`,
+          r8: key
+        }, false);
+      }, best => {
         r8CancelRef.current[playerIdx] = null;
-        // book it now if nothing has been booked by hand meanwhile; otherwise keep it for a click
-        const q = playersRef.current[playerIdx];
-        const untouched = q && q.undoStack.length === 0 && !q.hint && !q.roundDone;
-        if (untouched) applyHint(playerIdx, start, best);
-        setR8Job(playerIdx, j => j && j.key === key ? {
-          ...j,
-          progress: 1,
-          result: best,
-          stale: !untouched
-        } : j);
+        const prev = (r8JobsRef.current[playerIdx] || {}).result;
+        // after a best-so-far, say the search is complete; otherwise as in rounds 9 and 10
+        const note = prev && !samePlay(prev, best) ? 'Better play found · all plays checked' : best.placements.length === 0 ? 'Best play: book nothing' : prev ? 'Best play · all plays checked' : '';
+        deliver({
+          ...best,
+          note,
+          r8: key
+        }, true);
       });
       return;
     }
@@ -3927,13 +4055,14 @@ window.Simili = function Simili() {
     };
     for (const pl of placements) ns = bookPlacement(ns, pl);
     // Round 10 always gives the outcome; Round 9 points out an empty booking
-    const note = round === TOTAL_ROUNDS - 1 ? best.winPct === 100 ? `Best play wins with ${best.pointsIfWinText}` : 'No booking reaches 100' : best.placements.length === 0 ? 'Best play: book nothing' : '';
+    const note = best.note !== undefined ? best.note : round === TOTAL_ROUNDS - 1 ? best.winPct === 100 ? `Best play wins with ${best.pointsIfWinText}` : 'No booking reaches 100' : best.placements.length === 0 ? 'Best play: book nothing' : '';
     const cells = placements.map(pl => `${pl.category}-${pl.row}-${pl.col}`);
     return {
       ...ns,
       hint: {
         note,
-        cells
+        cells,
+        r8: best.r8 || null
       }
     };
   };
@@ -4106,7 +4235,7 @@ window.Simili = function Simili() {
   }, [players]);
   useEffect(() => () => r8CancelRef.current.forEach((c, i) => stopR8Job(i)), []);
   const [, setR8Tick] = useState(0);
-  const r8Running = r8Jobs.some(j => j && !j.result);
+  const r8Running = r8Jobs.some(j => j && !j.final);
   useEffect(() => {
     if (!r8Running) return;
     const t = setInterval(() => setR8Tick(x => x + 1), 1000);
@@ -4118,10 +4247,12 @@ window.Simili = function Simili() {
       bonusBookSource: source
     });
   };
+  // Cancel on a bonus book also clears any digit picked for it
   const handleEndBonusBook = playerIdx => {
     updatePlayer(playerIdx, {
       bonusBookPhase: false,
-      bonusBookSource: null
+      bonusBookSource: null,
+      selectedBankIndices: []
     });
   };
   const handleEndgameBonusDone = playerIdx => {
