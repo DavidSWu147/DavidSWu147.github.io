@@ -1,2 +1,2 @@
 # DavidSWu147.github.io
-# SIMILI version 1.5
+# SIMILI version 1.6
