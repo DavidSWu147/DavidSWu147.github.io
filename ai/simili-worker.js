@@ -8,10 +8,43 @@
 //  - { type: 'alt' }: the tie-break values of that position's other round-9 categories
 //  - { type: 'solve' }: that position's value, or null if it cannot beat the given best;
 //    with bound: null the per-roll bounds are worked out first and sent back too
+//  - { type: 'aiCategory', k, cat }: the computer player's value for one category at the
+//    start of a round with k rounds left (simili-ai.js; exact for k <= 2)
+//  - { type: 'aiBooking', k, cat, bankList, recheckRolls }: the computer player's booking
 importScripts('simili-solver.js');
 let solver = null, solverClassic = null;
+// computer player: simili-ai.js and its model (model.json, else the small model-small.json)
+let aiModel = null;
+const aiPlayers = {};
+function loadModel() {
+  if (!aiModel) {
+    const get = f => fetch(f).then(r => (r.ok ? r.json() : Promise.reject(new Error(f + ': ' + r.status))));
+    aiModel = get('model.json').catch(() => get('model-small.json'));
+  }
+  return aiModel;
+}
+async function aiJob(m) {
+  if (typeof SimiliAI === 'undefined') importScripts('simili-ai.js');
+  const model = await loadModel();
+  const key = m.classic ? 'c' : 'm';
+  if (!aiPlayers[key]) aiPlayers[key] = new SimiliAI.Player({ classic: !!m.classic, model, solver: new SimiliSolver.Solver({ classic: !!m.classic, exactLoss: false }) });
+  const pl = aiPlayers[key];
+  const st = SimiliSolver.makeState(m.rows, m.bank, m.usedA, m.usedB);
+  if (m.type === 'aiCategory') {
+    if (m.k <= 2) return { raw: pl.solver.categoryValue(st, m.cat, m.k) };
+    const v = pl.categoryValues(st, m.k, undefined, false, [m.cat])[0];
+    return { value: { v, u: SimiliAI.utility(v) } };
+  }
+  const rolls = [];
+  for (let i = 0; i < (m.recheckRolls || 8); i++) rolls.push([0, 1, 2].map(() => Math.floor(Math.random() * 10)));
+  return { best: pl.chooseBooking(st, m.cat, m.bankList, m.k, { top: 6, rolls }) };
+}
 self.onmessage = e => {
   const m = e.data;
+  if (m.type === 'aiCategory' || m.type === 'aiBooking') {
+    aiJob(m).then(r => self.postMessage({ id: m.id, ...r }), err => self.postMessage({ id: m.id, error: String(err && err.message || err) }));
+    return;
+  }
   if (!solver || solverClassic !== m.classic) { solver = new SimiliSolver.Solver({ classic: m.classic, exactLoss: false }); solverClassic = m.classic; }
   const st = SimiliSolver.makeState(m.rows, m.bank, m.usedA, m.usedB);
   if (m.type === 'screen') {

@@ -280,6 +280,8 @@
     // exactLoss: false -> the 4th value (points if lost) may come out low; the first three
     // stay exact and the search can skip much more (for odds displays, not for Hints)
     this.exactLoss = opts.exactLoss !== false;
+    // free books only in the last round (same values, far fewer options; see forEachBooking)
+    this.saveFreeBooks = opts.saveFreeBooks !== false;
     this.l1 = new Map(); this.l2size = 0;
   }
 
@@ -382,6 +384,12 @@
         // Option: stop here.
         cb(rows, bk, st.usedA, st.usedB, nMain, placements, missKey());
       }
+      // Before the last round a free book is never worth using: kept until round 10 (or
+      // after it), the same digit can still go in the same cell then, with everything
+      // known, and nothing in between depends on it (any partial row of a legal row is
+      // legal, free books do not count against booking limits, and unlocking only looks
+      // at the rows at that time).
+      if (!final && self.saveFreeBooks) return;
       if (st.usedA === 0 || (!classic && st.usedB === 0)) tryBonus(st.usedA, st.usedB, nMain, 0, -1);
     }
     // Use one free book (A or B), then possibly the other. In the last round a free
@@ -1750,7 +1758,7 @@
   }
   const api = { Solver, fromGame, summarize, makeState, enc, dec, E, SEQ, MAT, LAD, CAT_NAMES, ROLLS, SCORE, LEGAL, CANON, CANON_LAD, CLASS, ROW_LE, getExt, terminalScore, hasQuad, positionKey,
     // for running the round-8 search across workers (see bestBookingBnB for the order of work)
-    compareValues: cmp, compareFirst3: cmp3, tieBreakBetter: tieBetter, describeValue: describe };
+    compareValues: cmp, compareFirst3: cmp3, tieBreakBetter: tieBetter, describeValue: describe, candidateOf };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SimiliSolver = api;
 })(typeof self !== 'undefined' ? self : this);

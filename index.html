@@ -1821,6 +1821,159 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
   return cancel;
 }
 
+// --- Computer player (ai/simili-ai.js, run in Web Workers; rounds 9 and 10 exact).
+// Each returns { promise, cancel }.
+// A few messages for the workers (at most 3 at a time), answers in the same order.
+function runAiJobs(msgs) {
+  let cancelled = false;
+  const workers = [];
+  const cancel = () => {
+    cancelled = true;
+    workers.forEach(w => w.terminate());
+  };
+  const promise = new Promise((resolve, reject) => {
+    const out = new Array(msgs.length);
+    let next = 0,
+      done = 0;
+    const feed = w => {
+      if (next >= msgs.length) return;
+      const i = next++;
+      w.onmessage = e => {
+        if (cancelled) return;
+        if (e.data.error) {
+          cancel();
+          reject(new Error(e.data.error));
+          return;
+        }
+        out[i] = e.data;
+        done++;
+        if (done === msgs.length) {
+          cancel();
+          resolve(out);
+        } else feed(w);
+      };
+      w.postMessage({
+        ...msgs[i],
+        id: i
+      });
+    };
+    try {
+      for (let i = 0; i < Math.min(3, msgs.length); i++) {
+        const w = new Worker('ai/simili-worker.js');
+        w.onerror = ev => {
+          ev.preventDefault();
+          if (!cancelled) {
+            cancel();
+            reject(new Error('the computer player needs the page served over http(s)'));
+          }
+        };
+        workers.push(w);
+      }
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    workers.forEach(feed);
+  });
+  return {
+    promise,
+    cancel
+  };
+}
+const stateMsg = (state, classicMode) => ({
+  rows: Array.from(state.rows),
+  bank: Array.from(state.bank),
+  usedA: state.usedA,
+  usedB: state.usedB,
+  classic: !!classicMode
+});
+// Category at the start of a round (k rounds left): resolves to 'sequence' / 'matching' / 'ladder'.
+function computerCategory(state, k, classicMode) {
+  const job = runAiJobs([0, 1, 2].map(cat => ({
+    ...stateMsg(state, classicMode),
+    type: 'aiCategory',
+    k,
+    cat
+  })));
+  const promise = job.promise.then(rs => {
+    let b = 0;
+    for (let c = 1; c < 3; c++) {
+      // exact values (rounds 9-10): win, points if win, Quad; estimates: one combined score
+      const better = k <= 2 ? SimiliSolver.compareFirst3(rs[c].raw, rs[b].raw) > 0 : rs[c].value.u > rs[b].value.u;
+      if (better) b = c;
+    }
+    return SimiliSolver.CAT_NAMES[b];
+  });
+  return {
+    promise,
+    cancel: job.cancel
+  };
+}
+// Booking after the roll. Round 8 (k = 3): the Round 8 Hint's exact search, if it finishes
+// within R8_COMPUTER_SECONDS; else its best so far; else (nothing found yet, as on big
+// Sequence decisions) the network's choice, re-checked with the exact solver.
+const R8_COMPUTER_SECONDS = 30;
+function computerBooking(state, cat, bankList, k, classicMode) {
+  if (k === 3) {
+    let stop = () => {},
+      timer = null,
+      net = null,
+      settled = false;
+    const promise = new Promise((resolve, reject) => {
+      let soFar = null;
+      const finish = best => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        stop();
+        if (net) net.cancel();
+        resolve(best);
+      };
+      net = runAiJobs([{
+        ...stateMsg(state, classicMode),
+        type: 'aiBooking',
+        k,
+        cat,
+        bankList,
+        recheckRolls: 8
+      }]);
+      let netBest = null;
+      net.promise.then(rs => {
+        netBest = rs[0].best;
+      }, () => {});
+      stop = startRound8Job(state, cat, bankList, classicMode, () => {}, best => {
+        soFar = best;
+      }, finish, {
+        reportAll: true
+      });
+      timer = setTimeout(() => {
+        if (soFar) finish(soFar);else if (netBest) finish(netBest);else net.promise.then(rs => finish(rs[0].best), reject);
+      }, R8_COMPUTER_SECONDS * 1000);
+    });
+    return {
+      promise,
+      cancel: () => {
+        settled = true;
+        clearTimeout(timer);
+        stop();
+        if (net) net.cancel();
+      }
+    };
+  }
+  const job = runAiJobs([{
+    ...stateMsg(state, classicMode),
+    type: 'aiBooking',
+    k,
+    cat,
+    bankList,
+    recheckRolls: 8
+  }]);
+  return {
+    promise: job.promise.then(rs => rs[0].best),
+    cancel: job.cancel
+  };
+}
+
 // --- Round 8 Hint: the exact round-8 search (see bestBookingBnB in simili-solver.js,
 // bounds: 'lazy', order: 'sample'), spread over Web Workers. Phase 0: for every position
 // the booking can lead to, a quick upper bound and a cheap estimate (Round 9 odds on
@@ -1837,7 +1990,9 @@ const R8_SHORTLIST = 24,
   R8_SCREEN_MIN = 300,
   R8_REFINE = 96,
   R8_FINE = 5;
-function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, onDone) {
+function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, onDone, opts) {
+  // opts.reportAll: report the best so far for smaller decisions too (the computer player)
+  const reportAll = !!(opts && opts.reportAll);
   const S = SimiliSolver,
     cmp = S.compareValues,
     cmp3 = S.compareFirst3,
@@ -1870,7 +2025,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   // report the best so far: once the first R8_SHORTLIST positions (in estimate order) are
   // finished or skipped, then whenever it improves
   const shortlistTick = (g, improved) => {
-    if (!useScreen || tied.length === 0) return;
+    if (!useScreen && !reportAll || tied.length === 0) return;
     if (!soFarSent) {
       if (g.oi >= R8_SHORTLIST || ++shortDone < R8_SHORTLIST) return;
       soFarSent = true;
@@ -2398,7 +2553,8 @@ function PlayerSheet({
   quadBonus,
   hintsOn,
   round9Odds,
-  r8Job
+  r8Job,
+  computer
 }) {
   const grids = ps.grids;
   const seqBonusI = hasSequenceBonusI(grids);
@@ -2419,8 +2575,18 @@ function PlayerSheet({
     }
     return ['sequence', 'matching', 'ladder'];
   })();
-  const canSelectBank = phase === 'book' && !ps.roundDone && (ps.bonusBookPhase || ps.bookingsThisRound < ps.maxBooking) || phase === 'endgame-bonus' && ps.bonusBookPhase && !ps.roundDone;
-  const playerLabel = twoPlayer ? `Player ${playerIdx + 1}` : null;
+  const canSelectBank = !computer && (phase === 'book' && !ps.roundDone && (ps.bonusBookPhase || ps.bookingsThisRound < ps.maxBooking) || phase === 'endgame-bonus' && ps.bonusBookPhase && !ps.roundDone);
+
+  // computer (Computer Player setting): played by the computer, you only click its End Round
+  const playerLabel = computer ? '🤖 Computer' : twoPlayer ? `Player ${playerIdx + 1}` : null;
+  const computerStatus = computer && computer.status ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      textAlign: 'center',
+      marginBottom: 8,
+      color: '#8b6914'
+    }
+  }, computer.status) : null;
   const playerColor = playerIdx === 0 ? '#2a6fdb' : '#d4442a';
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2446,7 +2612,7 @@ function PlayerSheet({
       opacity: 0.6,
       marginLeft: 8
     }
-  }, "\u2713 Done")), /*#__PURE__*/React.createElement("div", {
+  }, "\u2713 Done")), computerStatus, /*#__PURE__*/React.createElement("div", {
     style: {
       textAlign: 'center',
       marginBottom: 12
@@ -2465,7 +2631,13 @@ function PlayerSheet({
     style: {
       marginBottom: 12
     }
-  }, phase !== 'endgame-bonus' && phase !== 'gameover' && /*#__PURE__*/React.createElement(React.Fragment, null, phase === 'choose' && /*#__PURE__*/React.createElement("div", {
+  }, computer && computer.hideCategory && phase === 'choose' && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      textAlign: 'center',
+      opacity: 0.7
+    }
+  }, "Category chosen \u2713 (shown once you have chosen yours)"), phase !== 'endgame-bonus' && phase !== 'gameover' && !(computer && computer.hideCategory && phase === 'choose') && /*#__PURE__*/React.createElement(React.Fragment, null, phase === 'choose' && !computer && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 14,
       marginBottom: 6,
@@ -2479,7 +2651,7 @@ function PlayerSheet({
     }
   }, ['sequence', 'matching', 'ladder'].map(cat => /*#__PURE__*/React.createElement("button", {
     key: cat,
-    onClick: phase === 'choose' ? () => onUpdatePlayer(playerIdx, {
+    onClick: phase === 'choose' && !computer ? () => onUpdatePlayer(playerIdx, {
       chosenCategory: ps.chosenCategory === cat ? null : cat
     }) : undefined,
     style: {
@@ -2490,7 +2662,7 @@ function PlayerSheet({
       color: ps.chosenCategory === cat ? '#fff' : '#2a2a2a',
       border: '2px solid #2a2a2a',
       borderRadius: 4,
-      cursor: phase === 'choose' ? 'pointer' : 'default',
+      cursor: phase === 'choose' && !computer ? 'pointer' : 'default',
       transition: 'all 0.15s',
       opacity: phase !== 'choose' && ps.chosenCategory !== cat ? 0.4 : 1
     }
@@ -2568,7 +2740,7 @@ function PlayerSheet({
         marginTop: 2
       }
     }, !isZero && !isFull && info.outs ? info.outs + ' ' : '', "to win", !isZero && info.pointsIfWinText ? ` (${info.pointsIfWinText})` : ''));
-  })()), phase === 'choose' && !ps.chosenCategory && /*#__PURE__*/React.createElement("div", {
+  })()), phase === 'choose' && !ps.chosenCategory && !computer && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 12
     }
@@ -2652,7 +2824,7 @@ function PlayerSheet({
         textDecoration: history ? 'underline' : 'none',
         fontWeight: history ? 'bold' : 'normal'
       }
-    }, r < round && history ? ps.chosenCategory && r === round ? ps.chosenCategory[0].toUpperCase() : roundHistory[r] ? roundHistory[r].categories?.[playerIdx]?.[0]?.toUpperCase() || '·' : '·' : r === round && ps.chosenCategory ? ps.chosenCategory[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
+    }, r < round && history ? ps.chosenCategory && r === round ? ps.chosenCategory[0].toUpperCase() : roundHistory[r] ? roundHistory[r].categories?.[playerIdx]?.[0]?.toUpperCase() || '·' : '·' : r === round && ps.chosenCategory && !(computer && computer.hideCategory) ? ps.chosenCategory[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         gap: 1,
@@ -2819,7 +2991,7 @@ function PlayerSheet({
       flexWrap: 'wrap',
       alignItems: 'center'
     }
-  }, !ps.bonusBookPhase && phase === 'book' && /*#__PURE__*/React.createElement(React.Fragment, null, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
+  }, !ps.bonusBookPhase && phase === 'book' && !computer && /*#__PURE__*/React.createElement(React.Fragment, null, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
     onClick: () => onUseBonusBook(playerIdx, 'A'),
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2843,7 +3015,7 @@ function PlayerSheet({
       cursor: 'pointer',
       color: '#8b6914'
     }
-  }, "Use Seq Bonus II-B")), !ps.bonusBookPhase && /*#__PURE__*/React.createElement(React.Fragment, null, ps.undoStack.length > 0 && /*#__PURE__*/React.createElement("button", {
+  }, "Use Seq Bonus II-B")), !ps.bonusBookPhase && /*#__PURE__*/React.createElement(React.Fragment, null, ps.undoStack.length > 0 && !computer && /*#__PURE__*/React.createElement("button", {
     onClick: () => onUndo(playerIdx),
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2863,7 +3035,12 @@ function PlayerSheet({
       e.target.style.color = '#888';
       e.target.style.borderColor = '#ccc';
     }
-  }, "\u21A9 Undo"), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && (() => {
+  }, "\u21A9 Undo"), computer && ps.hint && ps.hint.note && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: '#8b6914'
+    }
+  }, ps.hint.note), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && !computer && (() => {
     // Round 8: the hint is worked out in the background (gold progress bar). Before
     // anything is found a click stops it; after that a click books the best so far
     const job = r8Job && !r8Job.final ? r8Job : null;
@@ -2916,7 +3093,7 @@ function PlayerSheet({
         color: '#8b6914'
       }
     }, ps.hint.note));
-  })(), /*#__PURE__*/React.createElement("button", {
+  })(), (!computer || computer.booked || phase !== 'book') && /*#__PURE__*/React.createElement("button", {
     onClick: () => onEndRound(playerIdx),
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2929,7 +3106,7 @@ function PlayerSheet({
       cursor: 'pointer',
       marginLeft: 'auto'
     }
-  }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round'))), phase === 'book' && !ps.bonusBookPhase && (round === TOTAL_ROUNDS - 3 || round === TOTAL_ROUNDS - 2) && hintsOn && typeof SimiliSolver !== 'undefined' && /*#__PURE__*/React.createElement(NextRoundPreview, {
+  }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round'))), phase === 'book' && !ps.bonusBookPhase && (round === TOTAL_ROUNDS - 3 || round === TOTAL_ROUNDS - 2) && hintsOn && typeof SimiliSolver !== 'undefined' && !computer && /*#__PURE__*/React.createElement(NextRoundPreview, {
     ps: ps,
     bank: bank,
     round: round,
@@ -2961,7 +3138,7 @@ function PlayerSheet({
         alignItems: 'center',
         flexWrap: 'wrap'
       }
-    }, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
+    }, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && !computer && /*#__PURE__*/React.createElement("button", {
       onClick: () => onUseBonusBook(playerIdx, 'A'),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2972,7 +3149,7 @@ function PlayerSheet({
         borderRadius: 4,
         cursor: 'pointer'
       }
-    }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && /*#__PURE__*/React.createElement("button", {
+    }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && !computer && /*#__PURE__*/React.createElement("button", {
       onClick: () => onUseBonusBook(playerIdx, 'B'),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -2983,7 +3160,7 @@ function PlayerSheet({
         borderRadius: 4,
         cursor: 'pointer'
       }
-    }, "Use Seq Bonus II-B"), ps.undoStack.length > 0 && /*#__PURE__*/React.createElement("button", {
+    }, "Use Seq Bonus II-B"), ps.undoStack.length > 0 && !computer && /*#__PURE__*/React.createElement("button", {
       onClick: () => onUndo(playerIdx),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -3478,7 +3655,10 @@ window.Simili = function Simili() {
   const [quadBonus, setQuadBonus] = useState(false);
   const [laxPlacement, setLaxPlacement] = useState(false);
   const [hintsOn, setHintsOn] = useState(false); // next-round odds preview + Hint button
-
+  // Computer Player: in 1-player games the computer plays (you watch); with 2 players it is Player 2
+  const [computerPlayer, setComputerPlayer] = useState(false);
+  const cpuIdx = computerPlayer ? twoPlayer ? 1 : 0 : -1;
+  const nameOf = i => i === cpuIdx ? 'Computer' : `Player ${i + 1}`;
   const [seedRolls, setSeedRolls] = useState(null);
   const [isSeededGame, setIsSeededGame] = useState(false);
   const allSeedsRef = useRef(null);
@@ -3654,6 +3834,12 @@ window.Simili = function Simili() {
   const [round9Start, setRound9Start] = useState(null); // solver positions at the start of Round 9, per player
   const [round9Odds, setRound9Odds] = useState(null); // per player: { progress, result }
   const [r8Jobs, setR8Jobs] = useState([]);
+  // computer player's current job: { key, stage: 'category' | 'booking' | 'ready' | 'applied', started, best, start }
+  const [cpu, setCpu] = useState(null);
+  const cpuRef = useRef({
+    key: null,
+    cancel: null
+  });
   const r8JobsRef = useRef(r8Jobs);
   r8JobsRef.current = r8Jobs; // Round 8 hint per player: { key, started, progress, result, stale }
   const r8CancelRef = useRef([]);
@@ -3784,12 +3970,14 @@ window.Simili = function Simili() {
     }, 2200);
   };
   const toggleBankSelection = (playerIdx, bankIdx) => {
+    if (playerIdx === cpuIdx) return;
     updatePlayerFn(playerIdx, p => ({
       ...p,
       selectedBankIndices: p.selectedBankIndices.includes(bankIdx) ? p.selectedBankIndices.filter(i => i !== bankIdx) : [bankIdx]
     }));
   };
   const handleBookDigit = (playerIdx, category, rowIdx, colIdx) => {
+    if (playerIdx === cpuIdx) return;
     const p = players[playerIdx];
     if (p.selectedBankIndices.length !== 1) return;
     const bankIdx = p.selectedBankIndices[0];
@@ -3942,6 +4130,7 @@ window.Simili = function Simili() {
     undoStack: []
   };
   const handleHint = playerIdx => {
+    if (playerIdx === cpuIdx) return;
     if (!hintsOn) return;
     const p = players[playerIdx];
     if (p.hint) {
@@ -4068,6 +4257,7 @@ window.Simili = function Simili() {
   };
   const applyHint = (playerIdx, start, best) => updatePlayerFn(playerIdx, () => hintedPlayer(start, best));
   const handleUndo = playerIdx => {
+    if (playerIdx === cpuIdx) return;
     updatePlayerFn(playerIdx, p => {
       if (p.undoStack.length === 0) return p;
       const s = p.undoStack[p.undoStack.length - 1];
@@ -4242,10 +4432,132 @@ window.Simili = function Simili() {
     return () => clearInterval(t);
   }, [r8Running]);
   const handleUseBonusBook = (playerIdx, source) => {
+    if (playerIdx === cpuIdx) return;
     updatePlayer(playerIdx, {
       bonusBookPhase: true,
       bonusBookSource: source
     });
+  };
+
+  // ---------- computer player ----------
+  // It picks its category at the start of each round and books after the roll; you click
+  // ROLL and its End Round. With 2 players its booking is shown once you have ended your turn.
+  const cpuKey = what => `${gameNumberRef.current}-${round}-${what}`;
+  const startCpu = (key, stage, job, onResult) => {
+    if (cpuRef.current.cancel) cpuRef.current.cancel();
+    cpuRef.current = {
+      key,
+      cancel: job.cancel
+    };
+    setCpu({
+      key,
+      stage,
+      started: Date.now()
+    });
+    job.promise.then(r => {
+      if (cpuRef.current.key === key) {
+        cpuRef.current.cancel = null;
+        onResult(r);
+      }
+    }, err => {
+      if (cpuRef.current.key === key) {
+        cpuRef.current.cancel = null;
+        setCpu({
+          key,
+          stage: 'error',
+          message: String(err && err.message || err)
+        });
+      }
+    });
+  };
+  // its category
+  useEffect(() => {
+    if (cpuIdx < 0 || phase !== 'choose' || typeof SimiliSolver === 'undefined') return;
+    const p = players[cpuIdx];
+    if (!p || p.chosenCategory) return;
+    const key = cpuKey('category');
+    if (cpuRef.current.key === key) return;
+    const {
+      state
+    } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(p) : p, bank.map(b => b.digit));
+    startCpu(key, 'category', computerCategory(state, TOTAL_ROUNDS - round, classicMode), cat => {
+      updatePlayer(cpuIdx, {
+        chosenCategory: cat
+      });
+      setCpu({
+        key,
+        stage: 'chosen'
+      });
+    });
+  }, [cpuIdx, phase, round, players]);
+  // its booking
+  useEffect(() => {
+    if (cpuIdx < 0 || phase !== 'book' || typeof SimiliSolver === 'undefined') return;
+    const p = players[cpuIdx];
+    if (!p || p.roundDone) return;
+    const key = cpuKey('booking');
+    if (cpuRef.current.key === key) return;
+    const start = roundStartOf(p);
+    const {
+      state,
+      bankList
+    } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(start) : start, bank.map(b => b.digit));
+    const cat = ['sequence', 'matching', 'ladder'].indexOf(start.chosenCategory);
+    startCpu(key, 'booking', computerBooking(state, cat, bankList, TOTAL_ROUNDS - round, classicMode), best => {
+      const n = best.placements.length;
+      setCpu({
+        key,
+        stage: 'ready',
+        best: {
+          ...best,
+          note: n ? `Booked ${n} digit${n > 1 ? 's' : ''}` : 'Booked nothing'
+        },
+        start
+      });
+    });
+  }, [cpuIdx, phase, round, players]);
+  // show it (with 2 players, once Player 1 has ended the turn)
+  useEffect(() => {
+    if (!cpu || cpu.stage !== 'ready' || phase !== 'book') return;
+    if (twoPlayer && !players[0].roundDone) return;
+    updatePlayerFn(cpuIdx, () => hintedPlayer(cpu.start, cpu.best));
+    setCpu({
+      ...cpu,
+      stage: 'applied'
+    });
+  }, [cpu, players, phase]);
+  // stop thinking when the game moves on (new game, abandoned, game over)
+  useEffect(() => {
+    if (cpuIdx >= 0 && (phase === 'choose' || phase === 'book' || phase === 'rolling')) return;
+    if (cpuRef.current.cancel) cpuRef.current.cancel();
+    cpuRef.current = {
+      key: null,
+      cancel: null
+    };
+  }, [phase, cpuIdx]);
+  useEffect(() => () => {
+    if (cpuRef.current.cancel) cpuRef.current.cancel();
+  }, []);
+  const cpuThinking = !!cpu && (cpu.stage === 'category' || cpu.stage === 'booking');
+  const [, setCpuTick] = useState(0);
+  useEffect(() => {
+    if (!cpuThinking) return;
+    const t = setInterval(() => setCpuTick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [cpuThinking]);
+  // what the computer's sheet says
+  const cpuView = idx => {
+    if (idx !== cpuIdx) return null;
+    const secs = cpu && cpu.started ? Math.round((Date.now() - cpu.started) / 1000) : 0;
+    let status = null;
+    if (cpu && cpu.key && cpu.key.startsWith(`${gameNumberRef.current}-${round}-`)) {
+      if (cpu.stage === 'category') status = `Choosing a category… ${secs}s`;else if (cpu.stage === 'booking') status = `Thinking… ${secs}s`;else if (cpu.stage === 'ready') status = 'Decided · end your turn to see its booking';else if (cpu.stage === 'error') status = `Cannot play: ${cpu.message}`;
+    }
+    return {
+      status,
+      booked: !!cpu && cpu.stage === 'applied' && cpu.key === cpuKey('booking'),
+      hideCategory: twoPlayer && phase === 'choose' && !players[0].chosenCategory
+    };
   };
   // Cancel on a bonus book also clears any digit picked for it
   const handleEndBonusBook = playerIdx => {
@@ -4306,7 +4618,8 @@ window.Simili = function Simili() {
           hintsOn,
           quadBonus,
           twoPlayer,
-          matchPlay
+          matchPlay,
+          computerPlayer
         }
       };
       if (!matchPlay) singleGameCounterRef.current++;
@@ -4390,8 +4703,8 @@ window.Simili = function Simili() {
         }));
       }
 
-      // Update game statistics (for non-seeded games)
-      if (!isSeededGame) {
+      // Update game statistics (for non-seeded games; not yet for games with the computer)
+      if (!isSeededGame && !computerPlayer) {
         const pageKey = `${twoPlayer ? '2p' : '1p'}-${matchPlay ? 'match' : 'single'}-${classicMode ? 'classic' : 'modern'}`;
         const isFinished = !abandoned;
 
@@ -4880,7 +5193,7 @@ window.Simili = function Simili() {
       opacity: 0.5
     }
   }, twoPlayer ? (() => {
-    const waiting = players.map((p, i) => !p.chosenCategory ? `Player ${i + 1}` : null).filter(Boolean);
+    const waiting = players.map((p, i) => !p.chosenCategory ? nameOf(i) : null).filter(Boolean);
     return `Waiting for ${waiting.join(' & ')} to choose a category...`;
   })() : 'Choose a category to roll.'), phase === 'rolling' && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -4921,7 +5234,8 @@ window.Simili = function Simili() {
     quadBonus: quadBonus,
     hintsOn: hintsOn,
     round9Odds: round9Odds ? round9Odds[idx] : null,
-    r8Job: r8Jobs[idx] || null
+    r8Job: r8Jobs[idx] || null,
+    computer: cpuView(idx)
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
@@ -4975,9 +5289,9 @@ window.Simili = function Simili() {
       p2W = gameOverInfo[1]?.won;
     const p1S = gameOverInfo[0]?.score || 0,
       p2S = gameOverInfo[1]?.score || 0;
-    if (p1W && p2W) return p1S > p2S ? 'Both Win — Player 1 Wins More!' : p2S > p1S ? 'Both Win — Player 2 Wins More!' : 'Both Win — Tied!';
-    if (p1W) return 'Player 1 Wins!';
-    if (p2W) return 'Player 2 Wins!';
+    if (p1W && p2W) return p1S > p2S ? `Both Win — ${nameOf(0)} Wins More!` : p2S > p1S ? `Both Win — ${nameOf(1)} Wins More!` : 'Both Win — Tied!';
+    if (p1W) return `${nameOf(0)} Wins!`;
+    if (p2W) return `${nameOf(1)} Wins!`;
     if (gameOverInfo[0]?.unwinnable && gameOverInfo[1]?.unwinnable) return 'This game was impossible to win!';
     return 'Game Over — Neither Player Won';
   })()), /*#__PURE__*/React.createElement("div", {
@@ -4995,7 +5309,7 @@ window.Simili = function Simili() {
       fontWeight: 'bold',
       color: i === 0 ? '#2a6fdb' : '#d4442a'
     }
-  }, "Player ", i + 1), /*#__PURE__*/React.createElement("div", {
+  }, nameOf(i)), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 20
     }
@@ -5015,7 +5329,7 @@ window.Simili = function Simili() {
       fontWeight: 'bold',
       marginBottom: 8
     }
-  }, abandoned ? 'Game Abandoned' : gameOverInfo[0]?.won ? '🎉 YOU WIN!' : gameOverInfo[0]?.unwinnable ? 'This game was impossible to win!' : 'Game Over'), /*#__PURE__*/React.createElement("div", {
+  }, abandoned ? 'Game Abandoned' : gameOverInfo[0]?.won ? computerPlayer ? '🤖 THE COMPUTER WINS!' : '🎉 YOU WIN!' : gameOverInfo[0]?.unwinnable ? 'This game was impossible to win!' : 'Game Over'), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 20,
       marginBottom: 4
@@ -5229,7 +5543,7 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 12
       }
-    }, "Player ", result.winner, " Wins the Match!", result.tiebreak && /*#__PURE__*/React.createElement("div", {
+    }, nameOf(result.winner - 1), " Wins the Match!", result.tiebreak && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 13,
         fontWeight: 'normal',
@@ -5322,7 +5636,7 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 8
       }
-    }, "\uD83C\uDFC6 Player ", p1M > p2M ? 1 : 2, " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("button", {
+    }, "\uD83C\uDFC6 ", nameOf(p1M > p2M ? 0 : 1), " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("button", {
       onClick: handleReset,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -5585,11 +5899,20 @@ window.Simili = function Simili() {
       pointerEvents: phase === 'pregame' ? 'auto' : 'none'
     }
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: computerPlayer,
+    onChange: setComputerPlayer,
+    leftLabel: "Human Player",
+    rightLabel: "Computer Player"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: twoPlayer,
     onChange: setTwoPlayer,
     leftLabel: "1 Player",
     rightLabel: "2 Players"
-  }), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8
     }
