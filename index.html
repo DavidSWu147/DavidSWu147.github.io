@@ -2652,7 +2652,8 @@ function PlayerSheet({
   hintsOn,
   round9Odds,
   r8Job,
-  computer
+  computer,
+  categoryLocked
 }) {
   const grids = ps.grids;
   const seqBonusI = hasSequenceBonusI(grids);
@@ -2676,15 +2677,9 @@ function PlayerSheet({
   const canSelectBank = !computer && (phase === 'book' && !ps.roundDone && (ps.bonusBookPhase || ps.bookingsThisRound < ps.maxBooking) || phase === 'endgame-bonus' && ps.bonusBookPhase && !ps.roundDone);
 
   // computer (Computer Player setting): played by the computer, you only click its End Round
-  const playerLabel = computer ? '🤖 Computer' : twoPlayer ? `Player ${playerIdx + 1}` : null;
-  const computerStatus = computer && computer.status ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      textAlign: 'center',
-      marginBottom: 8,
-      color: '#8b6914'
-    }
-  }, computer.status) : null;
+  const playerLabel = computer ? 'Computer' : twoPlayer ? `Player ${playerIdx + 1}` : null;
+  // the computer's category: hidden (buttons, none highlighted) until you reveal it or roll
+  const cpuShown = !!(computer && ps.chosenCategory && !computer.hideCategory);
   const playerColor = playerIdx === 0 ? '#2a6fdb' : '#d4442a';
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2710,7 +2705,7 @@ function PlayerSheet({
       opacity: 0.6,
       marginLeft: 8
     }
-  }, "\u2713 Done")), computerStatus, /*#__PURE__*/React.createElement("div", {
+  }, "\u2713 Done")), /*#__PURE__*/React.createElement("div", {
     style: {
       textAlign: 'center',
       marginBottom: 12
@@ -2725,53 +2720,75 @@ function PlayerSheet({
       fontSize: 16,
       fontWeight: 'bold'
     }
-  }, "Score: ", currentScore + (phase === 'gameover' && quadBonus && hasQuadBonus(grids, laxPlacement) ? 1 : 0), " / 100")), (phase === 'choose' || phase === 'book' || phase === 'rolling' || phase === 'endgame-bonus' || phase === 'gameover') && ps.chosenCategory && /*#__PURE__*/React.createElement("div", {
+  }, "Score: ", currentScore + (phase === 'gameover' && quadBonus && hasQuadBonus(grids, laxPlacement) ? 1 : 0), " / 100")), (phase === 'choose' || phase === 'book' || phase === 'rolling' || phase === 'endgame-bonus' || phase === 'gameover') && (ps.chosenCategory || computer && phase === 'choose') && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 12
     }
-  }, computer && computer.hideCategory && phase === 'choose' && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      textAlign: 'center',
-      opacity: 0.7
-    }
-  }, "Category chosen \u2713 (shown once you have chosen yours)"), phase !== 'endgame-bonus' && phase !== 'gameover' && !(computer && computer.hideCategory && phase === 'choose') && /*#__PURE__*/React.createElement(React.Fragment, null, phase === 'choose' && !computer && /*#__PURE__*/React.createElement("div", {
+  }, phase !== 'endgame-bonus' && phase !== 'gameover' && /*#__PURE__*/React.createElement(React.Fragment, null, phase === 'choose' && !computer && /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 14,
+      lineHeight: '18px',
       marginBottom: 6,
       textAlign: 'center'
     }
-  }, "Choose your category:"), /*#__PURE__*/React.createElement("div", {
+  }, "Choose your category:"), phase === 'choose' && computer && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 14,
+      lineHeight: '18px',
+      marginBottom: 6,
+      textAlign: 'center'
+    }
+  }, cpuShown ? "Computer's category choice:" : ps.chosenCategory ? 'Category chosen ✓ (click Reveal to show)' : computer.status || 'Choosing a category…'), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
       justifyContent: 'center'
     }
-  }, ['sequence', 'matching', 'ladder'].map(cat => /*#__PURE__*/React.createElement("button", {
-    key: cat,
-    onClick: phase === 'choose' && !computer ? () => onUpdatePlayer(playerIdx, {
-      chosenCategory: ps.chosenCategory === cat ? null : cat
-    }) : undefined,
+  }, computer && computer.canReveal && ps.chosenCategory && !cpuShown ? /*#__PURE__*/React.createElement("button", {
+    onClick: computer.onReveal,
+    title: "Show the computer's category (your category is then locked)",
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 16,
+      lineHeight: '20px',
       padding: '6px 16px',
-      background: ps.chosenCategory === cat ? '#2a2a2a' : '#fff',
-      color: ps.chosenCategory === cat ? '#fff' : '#2a2a2a',
+      background: '#fff',
+      color: '#2a2a2a',
       border: '2px solid #2a2a2a',
       borderRadius: 4,
-      cursor: phase === 'choose' && !computer ? 'pointer' : 'default',
-      transition: 'all 0.15s',
-      opacity: phase !== 'choose' && ps.chosenCategory !== cat ? 0.4 : 1
+      cursor: 'pointer'
     }
-  }, cat[0].toUpperCase()))), /*#__PURE__*/React.createElement("div", {
+  }, "Reveal") : ['sequence', 'matching', 'ladder'].map(cat => {
+    const on = ps.chosenCategory === cat && (!computer || cpuShown);
+    const clickable = phase === 'choose' && !computer && !categoryLocked;
+    return /*#__PURE__*/React.createElement("button", {
+      key: cat,
+      onClick: clickable ? () => onUpdatePlayer(playerIdx, {
+        chosenCategory: ps.chosenCategory === cat ? null : cat
+      }) : undefined,
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 16,
+        lineHeight: '20px',
+        padding: '6px 16px',
+        background: on ? '#2a2a2a' : '#fff',
+        color: on ? '#fff' : '#2a2a2a',
+        border: '2px solid #2a2a2a',
+        borderRadius: 4,
+        cursor: clickable ? 'pointer' : 'default',
+        transition: 'all 0.15s',
+        opacity: phase !== 'choose' && ps.chosenCategory !== cat ? 0.4 : 1
+      }
+    }, cat[0].toUpperCase());
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
+      lineHeight: '16px',
       textAlign: 'center',
       marginTop: 4,
       opacity: 0.6
     }
-  }, ps.chosenCategory ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 2 && hintsOn && ps.chosenCategory && typeof SimiliSolver !== 'undefined' && (() => {
+  }, ps.chosenCategory && (!computer || cpuShown) ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected${categoryLocked && phase === 'choose' ? ' · locked' : ''}` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 2 && hintsOn && ps.chosenCategory && (!computer || cpuShown) && typeof SimiliSolver !== 'undefined' && (() => {
     const c = round9Odds && round9Odds.result ? round9Odds.result.categories.find(x => x.category === ps.chosenCategory) : null;
     if (!c) {
       const pct = round9Odds ? Math.round((round9Odds.progress || 0) * 100) : 0;
@@ -2813,7 +2830,7 @@ function PlayerSheet({
         marginTop: 2
       }
     }, "to win", !isZero && c.pointsIfWin !== null && c.pointsIfWin !== 100 ? ` (${c.pointsIfWinText})` : ''));
-  })(), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (() => {
+  })(), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (!computer || cpuShown) && (() => {
     const info = winChances[ps.chosenCategory];
     if (!info) return null;
     const pct = info.winPct;
@@ -2845,6 +2862,7 @@ function PlayerSheet({
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 14,
+      lineHeight: '18px',
       marginBottom: 6,
       textAlign: 'center'
     }
@@ -2862,6 +2880,7 @@ function PlayerSheet({
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 16,
+      lineHeight: '20px',
       padding: '6px 16px',
       background: '#fff',
       color: '#2a2a2a',
@@ -2873,6 +2892,7 @@ function PlayerSheet({
   }, cat[0].toUpperCase()))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
+      lineHeight: '16px',
       textAlign: 'center',
       marginTop: 4,
       opacity: 0.6
@@ -2922,7 +2942,7 @@ function PlayerSheet({
         textDecoration: history ? 'underline' : 'none',
         fontWeight: history ? 'bold' : 'normal'
       }
-    }, r < round && history ? ps.chosenCategory && r === round ? ps.chosenCategory[0].toUpperCase() : roundHistory[r] ? roundHistory[r].categories?.[playerIdx]?.[0]?.toUpperCase() || '·' : '·' : r === round && ps.chosenCategory && !(computer && computer.hideCategory) ? ps.chosenCategory[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
+    }, r < round && history ? ps.chosenCategory && r === round ? ps.chosenCategory[0].toUpperCase() : roundHistory[r] ? roundHistory[r].categories?.[playerIdx]?.[0]?.toUpperCase() || '·' : '·' : r === round && ps.chosenCategory && (!computer || cpuShown) ? ps.chosenCategory[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         gap: 1,
@@ -3133,12 +3153,12 @@ function PlayerSheet({
       e.target.style.color = '#888';
       e.target.style.borderColor = '#ccc';
     }
-  }, "\u21A9 Undo"), computer && ps.hint && ps.hint.note && /*#__PURE__*/React.createElement("span", {
+  }, "\u21A9 Undo"), computer && (computer.status || ps.hint && ps.hint.note) && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 11,
       color: '#8b6914'
     }
-  }, ps.hint.note), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && !computer && (() => {
+  }, computer.status || ps.hint.note), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && !computer && (() => {
     // Round 8: the hint is worked out in the background (gold progress bar). Before
     // anything is found a click stops it; after that a click books the best so far
     const job = r8Job && !r8Job.final ? r8Job : null;
@@ -4649,6 +4669,9 @@ window.Simili = function Simili() {
     const t = setInterval(() => setCpuTick(x => x + 1), 1000);
     return () => clearInterval(t);
   }, [cpuThinking]);
+  // Reveal (2 players): shows the computer's category for this round and locks yours
+  const [cpuRevealKey, setCpuRevealKey] = useState(null);
+  const cpuRevealed = cpuIdx >= 0 && cpuRevealKey === cpuKey('reveal');
   // what the computer's sheet says
   const cpuView = idx => {
     if (idx !== cpuIdx) return null;
@@ -4660,7 +4683,10 @@ window.Simili = function Simili() {
     return {
       status,
       booked: !!cpu && cpu.stage === 'applied' && cpu.key === cpuKey('booking'),
-      hideCategory: twoPlayer && phase === 'choose' && !players[0].chosenCategory
+      // with you as Player 1: hidden until you click Reveal (which locks your category) or ROLL
+      hideCategory: twoPlayer && phase === 'choose' && !cpuRevealed,
+      canReveal: twoPlayer && phase === 'choose' && !!players[0].chosenCategory,
+      onReveal: () => setCpuRevealKey(cpuKey('reveal'))
     };
   };
   // Cancel on a bonus book also clears any digit picked for it
@@ -5339,7 +5365,8 @@ window.Simili = function Simili() {
     hintsOn: hintsOn,
     round9Odds: round9Odds ? round9Odds[idx] : null,
     r8Job: r8Jobs[idx] || null,
-    computer: cpuView(idx)
+    computer: cpuView(idx),
+    categoryLocked: idx !== cpuIdx && cpuRevealed && phase === 'choose'
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed #ccc',
@@ -5567,7 +5594,7 @@ window.Simili = function Simili() {
         fontSize: 18,
         color: '#2a6fdb'
       }
-    }, nameOf(0)), /*#__PURE__*/React.createElement("div", {
+    }, winnerName(0)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 28
       }
@@ -5582,7 +5609,7 @@ window.Simili = function Simili() {
         fontSize: 18,
         color: '#d4442a'
       }
-    }, nameOf(1)), /*#__PURE__*/React.createElement("div", {
+    }, winnerName(1)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 28
       }
@@ -5740,7 +5767,7 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 8
       }
-    }, "\uD83C\uDFC6 ", nameOf(p1M > p2M ? 0 : 1), " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("button", {
+    }, "\uD83C\uDFC6 ", winnerName(p1M > p2M ? 0 : 1), " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("button", {
       onClick: handleReset,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
