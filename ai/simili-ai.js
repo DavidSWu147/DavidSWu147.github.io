@@ -199,6 +199,11 @@
   // Estimates of equivalent positions can differ in the last bits (sums in a different
   // order); closer than this they count as equal and the usual tie-breaks decide.
   const TIE = 1e-7;
+  // Booking estimates closer than this to the best (utility: about win chance, 0.005 = half
+  // a point) count as equal; the networks cannot tell such differences apart (their typical
+  // error is 1-2 points in the early rounds), so the fewest digits booked decides. By k (rounds
+  // left including this one); none from Round 8 on (k <= 3: exact, or nearly).
+  const TIE_MARGIN = { 9: 0.005, 8: 0.005, 7: 0.004, 6: 0.003, 5: 0.002, 4: 0.001 };
 
   // ---------- player ----------
   // model: { nets: { 2: spec, 3: spec, ... } } (k = rounds left at the start of a round)
@@ -215,6 +220,8 @@
     }
     this.o2 = new Float64Array(3);
     this.frame = null;
+    // margins: { k: margin } instead of TIE_MARGIN ({} for none)
+    this.margins = opts.margins || null;
     // canonical: false - no renaming at all (as before; for comparisons)
     this.fixedFrame = opts.canonical === false ? 0 : null;
     this.idx = new Int32Array(MAXACTIVE); this.val = new Float32Array(MAXACTIVE);
@@ -355,38 +362,76 @@
   // Booking after the roll: { placements (as bestBooking), value }. bankList includes the roll.
   // recheck: { top, rolls } - the `top` best bookings by the network are judged again by
   // looking one round further (the network for the round after, or the exact solver),
-  // over the same `rolls` (digit triples) for all of them. Picking the best of ~1000
-  // estimates favours the ones the network happens to overrate; the deeper look averages
-  // many estimates, so those errors partly cancel.
+  // over the same `rolls` (digit triples) for all of them, or over all 220 rolls with
+  // rolls: 'all'. Picking the best of ~1000 estimates favours the ones the network happens
+  // to overrate; the deeper look averages many estimates, so those errors partly cancel.
+  // Estimates within the round's tie margin (tieMargin) of the best count as equal: among
+  // them the one booking the fewest digits, and of those the best estimate.
+  Player.prototype.tieMargin = function (k) {
+    const m = this.margins || TIE_MARGIN;
+    return m[k] || 0;
+  };
   Player.prototype.chooseBooking = function (st, cat, bankList, k, recheck) {
     if (k <= 2) return this.solver.bestBooking(st, cat, bankList, k);
     const bank = new Int8Array(10);
     for (const b of bankList) if (!b.used) bank[b.digit]++;
+    const margin = Math.max(TIE, this.tieMargin(k));
     this.frame = canonicalize(st.rows, bank);     // one renaming for all options (see bestAfterRoll)
-    const top = recheck && recheck.top > 1 ? recheck.top : 1;
-    const list = [];       // best `top` by estimate, best first
+    // every position the booking can lead to, once (equivalent bookings: the tie-breaks' choice)
+    const byKey = new Map();
     this.solver.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
-      const v = this.value(rows, bk, uA, uB, k - 1), u = utility(v);
-      if (list.length === top && u < list[top - 1].u - TIE) return;
+      const key = this.solver.key(rows, bk, uA, uB, k - 1);
       const cand = S.candidateOf(rows, placements, bankList, this.classic);
-      // equal estimates (equivalent positions): the solver's booking tie-breaks
-      const same = list.findIndex(x => Math.abs(x.u - u) <= TIE);
-      if (same >= 0) { if (S.tieBreakBetter(cand, list[same].cand)) list[same] = { u, v, cand, rows: Int16Array.from(rows), bk: Int8Array.from(bk), uA, uB }; return; }
-      list.push({ u, v, cand, rows: Int16Array.from(rows), bk: Int8Array.from(bk), uA, uB });
-      list.sort((a, b) => b.u - a.u);
-      if (list.length > top) list.pop();
+      const old = byKey.get(key);
+      if (old) { if (S.tieBreakBetter(cand, old.cand)) old.cand = cand; return; }
+      const v = this.value(rows, bk, uA, uB, k - 1);
+      byKey.set(key, { u: utility(v), v, cand, rows: Int16Array.from(rows), bk: Int8Array.from(bk), uA, uB });
     });
     this.frame = null;
-    let best = list[0];
-    if (top > 1 && list.length > 1) {
+    const all = [...byKey.values()].sort((a, b) => b.u - a.u);
+    // among those within `margin` of the best: the fewest digits booked, then the best
+    // estimate (equal estimates: the booking tie-breaks)
+    const pick = list => {
       let bu = -Infinity;
+      for (const x of list) if (x.u > bu) bu = x.u;
+      let b = null;
       for (const x of list) {
-        const v = this.positionValue(S.makeState(x.rows, x.bk, x.uA, x.uB), k - 1, recheck.rolls);
-        const u = utility(v);
-        if (u > bu + TIE) { bu = u; best = { ...x, v }; }
+        if (x.u < bu - margin) continue;
+        if (b === null || x.cand.n < b.cand.n || (x.cand.n === b.cand.n && (x.u > b.u + TIE || (Math.abs(x.u - b.u) <= TIE && S.tieBreakBetter(x.cand, b.cand))))) b = x;
       }
-    }
+      return b;
+    };
+    const top = recheck && recheck.top > 1 ? recheck.top : 1;
+    let best;
+    if (top > 1 && all.length > 1) {
+      // the `top` best estimates, and the margin's choice among the near-best if it is not one of them
+      const list = all.slice(0, top);
+      const tb = pick(all);
+      if (!list.includes(tb)) list.push(tb);
+      const rolls = recheck.rolls === 'all' ? undefined : recheck.rolls;
+      best = pick(list.map(x => {
+        const v = this.positionValue(S.makeState(x.rows, x.bk, x.uA, x.uB), k - 1, rolls);
+        return { ...x, v, u: utility(v) };
+      }));
+    } else best = pick(all);
     return { placements: best.cand.placements.map(p => ({ ...p, category: S.CAT_NAMES[p.cat] })), value: best.v };
+  };
+
+  // The `top` bookings by the network's estimate alone, best first, as placement lists
+  // (equivalent positions once). Cheap: used to order the exact Round 8 search, so that
+  // the likeliest plays are checked first.
+  Player.prototype.rankBookings = function (st, cat, bankList, k, top) {
+    const bank = new Int8Array(10);
+    for (const b of bankList) if (!b.used) bank[b.digit]++;
+    this.frame = canonicalize(st.rows, bank);
+    const seen = new Map();
+    this.solver.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
+      const key = this.solver.key(rows, bk, uA, uB, k - 1);
+      if (seen.has(key)) return;
+      seen.set(key, { u: utility(this.value(rows, bk, uA, uB, k - 1)), placements: placements.map(p => ({ ...p })) });
+    });
+    this.frame = null;
+    return [...seen.values()].sort((a, b) => b.u - a.u).slice(0, top).map(x => x.placements);
   };
 
   // The game looks the same after renaming every digit d to s*d + t (mod 10), s = +-1:
@@ -415,5 +460,5 @@
     return features(canon.rows, canon.bank, p.uA, p.uB, p.classic, idx, val);
   }
 
-  return { TIE, canonicalize, canonicalFeatures, renamePosition, features, NFEAT, MAXACTIVE, Net, Player, utility, encode, decode, LS, LQ, CLS };
+  return { TIE, TIE_MARGIN, canonicalize, canonicalFeatures, renamePosition, features, NFEAT, MAXACTIVE, Net, Player, utility, encode, decode, LS, LQ, CLS };
 });

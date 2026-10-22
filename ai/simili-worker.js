@@ -6,12 +6,14 @@
 //    position (round-8 Hint), and its estimate from every k-th roll
 //  - { type: 'screen', sample: k }: that estimate alone
 //  - { type: 'alt' }: the tie-break values of that position's other round-9 categories
-//  - { type: 'solve' }: that position's value, or null if it cannot beat the given best;
+//  - { type: 'solve', order }: that position's value, or null if it cannot beat the given best
+//    (order: the rolls to solve first; per-roll wins come back as per);
 //    with bound: null the per-roll bounds are worked out first and sent back too
 //  - { type: 'aiCategory', k, cat }: the computer player's value for one category at the
 //    start of a round with k rounds left (simili-ai.js; exact for k <= 2)
 //  - { type: 'aiBooking', k, cat, bankList, recheckRolls }: the computer player's booking
 //  - { type: 'aiRank', k, cat, bankList, top }: its `top` bookings by the network alone, best first
+//  - { type: 'aiValues', k, states }: the network's utility for each of the states
 importScripts('simili-solver.js');
 let solver = null, solverClassic = null;
 // Smaller caches than the solver's defaults: a page runs up to 8 of these workers at once,
@@ -40,15 +42,22 @@ async function aiJob(m) {
     const v = pl.categoryValues(st, m.k, undefined, false, [m.cat])[0];
     return { value: { v, u: SimiliAI.utility(v) } };
   }
+  // the network's value (utility) of each of m.states with m.k rounds left (orders the Round 8 search)
+  if (m.type === 'aiValues') return { values: m.states.map(p => SimiliAI.utility(pl.value(Int16Array.from(p.rows), Int8Array.from(p.bank), p.usedA, p.usedB, m.k))) };
   // the network's ranking of the bookings (orders the computer's exact Round 8 search)
   if (m.type === 'aiRank') return { ranked: pl.rankBookings(st, m.cat, m.bankList, m.k, m.top || 40) };
-  const rolls = [];
-  for (let i = 0; i < (m.recheckRolls || 8); i++) rolls.push([0, 1, 2].map(() => Math.floor(Math.random() * 10)));
+  // the re-check over all 220 rolls in Rounds 2-7 (a few seconds); in Round 8 it uses the
+  // exact solver, so a sample of rolls there
+  let rolls = 'all';
+  if (m.k <= 3) {
+    rolls = [];
+    for (let i = 0; i < (m.recheckRolls || 8); i++) rolls.push([0, 1, 2].map(() => Math.floor(Math.random() * 10)));
+  }
   return { best: pl.chooseBooking(st, m.cat, m.bankList, m.k, { top: 6, rolls }) };
 }
 self.onmessage = e => {
   const m = e.data;
-  if (m.type === 'aiCategory' || m.type === 'aiBooking' || m.type === 'aiRank') {
+  if (m.type === 'aiCategory' || m.type === 'aiBooking' || m.type === 'aiRank' || m.type === 'aiValues') {
     aiJob(m).then(r => self.postMessage({ id: m.id, ...r }), err => self.postMessage({ id: m.id, error: String(err && err.message || err) }));
     return;
   }
@@ -69,9 +78,11 @@ self.onmessage = e => {
       : v => best === null || cmp(v, best) > 0 || (cmp(v, best) === 0 && m.tieWins);
     const bound = m.bound || solver.positionBound(st);
     solver.exactLoss = m.phase !== 1;
-    const v = solver.valueWithCutoff(st, bound, beats);
+    // m.order: the roll order to use (see valueWithCutoff); the per-roll wins of the
+    // returned value's category come back as per (for the next roll order)
+    const v = solver.valueWithCutoff(st, bound, beats, { order: m.order || null, record: true });
     solver.exactLoss = false;
-    self.postMessage({ id: m.id, v, bound: m.bound ? undefined : bound });
+    self.postMessage({ id: m.id, v, bound: m.bound ? undefined : bound, per: v && solver.lastPer ? Array.from(solver.lastPer) : null });
   } else {
     solver.exactLoss = false;
     const v = solver.categoryValueRange(st, m.cat, m.roundsLeft, m.r0, m.r1);

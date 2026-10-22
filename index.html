@@ -2047,6 +2047,21 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
     refineList = [],
     refined = 0;
   const useScreen = n >= R8_SCREEN_MIN;
+  // Big decisions: the plays are ordered by the computer player's network (all of them in
+  // a fraction of a second) instead of the estimate passes (1 roll in 20, then 1 in 5 for
+  // the top 96), which cost about a third of the whole search. If the network cannot be
+  // loaded, they are ordered by their upper bounds. opts.noNet: the estimates as before.
+  const netOrder = useScreen && !(opts && opts.noNet) && typeof runAiJobs === 'function';
+  let netState = netOrder ? 'pending' : 'off',
+    waitingNet = false,
+    pumpRun = null;
+  // Rolls in the order the best play so far loses on them, worst first: other plays tend
+  // to be ruled out sooner, and those rolls are quick to solve (about twice as fast overall).
+  let rollOrder = null;
+  const setRollOrder = per => {
+    if (!per) return;
+    rollOrder = S.ROLLS.map((r, i) => i).sort((x, y) => per[x] - per[y] || S.ROLLS[y].w - S.ROLLS[x].w);
+  };
   let shortDone = 0,
     soFarSent = false;
   // report the best so far: once the first R8_SHORTLIST positions (in estimate order) are
@@ -2142,8 +2157,8 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
     classic: !!classicMode
   });
   // with the estimates, estimating everything is a large share of the time to the first answer
-  const p0 = useScreen ? 0.25 : 0.1,
-    p1 = useScreen ? 0.3 : 0.1;
+  const p0 = useScreen && !netOrder ? 0.25 : 0.1,
+    p1 = useScreen && !netOrder ? 0.3 : 0.1;
   const report = () => onProgress(phase === 0 ? p0 * boundsDone / n : phase === 0.5 ? p0 + (p1 - p0) * refined / refineList.length : phase === 1 ? p1 + (0.9 - p1) * processed / n : phase === 2 ? 0.9 + 0.08 * (tied.length ? tiedDone / tied.length : 1) : 0.98 + 0.02 * (ties.length ? altDone / ties.length : 1), {
     checked: processed,
     total: n
@@ -2157,7 +2172,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
         msg: {
           ...base(g),
           type: 'bound',
-          sample: useScreen ? R8_SAMPLE : 0
+          sample: useScreen && !netOrder ? R8_SAMPLE : 0
         },
         done: r => {
           g.bound = r.bound;
@@ -2195,7 +2210,8 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
             type: 'solve',
             bound: g.bound.quick ? null : g.bound,
             phase: 1,
-            best: best3
+            best: best3,
+            order: rollOrder
           },
           done: r => {
             processed++;
@@ -2207,6 +2223,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
                 best3 = r.v;
                 tied = [g];
                 improved = true;
+                setRollOrder(r.per);
               } else if (c === 0) tied.push(g);
             }
             shortlistTick(g, improved);
@@ -2231,7 +2248,8 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
             bound: g.bound.quick ? null : g.bound,
             phase: 2,
             best: best ? best.v : null,
-            tieWins: wins
+            tieWins: wins,
+            order: rollOrder
           },
           done: r => {
             tiedDone++;
@@ -2267,7 +2285,23 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   // move on when a phase has handed out everything and all its answers are back
   const advance = () => {
     const sortBy = (list, key) => list.sort((a, b) => cmp3(key(b), key(a)) || (tieBetter(a.cand, b.cand) ? -1 : tieBetter(b.cand, a.cand) ? 1 : 0));
-    if (phase === 0 && useScreen) {
+    if (phase === 0 && netOrder) {
+      // wait for the network's ranking (it is usually back long before the bounds)
+      if (netState === 'pending') {
+        waitingNet = true;
+        return false;
+      }
+      order = netState === 'ready' ? groups.slice().sort((a, b) => b.net - a.net) : sortBy(groups.slice(), g => g.bound.ub);
+      phase = 1;
+      nextIdx = 0;
+      {
+        const pos = new Map(order.map((g, i) => [g, i]));
+        order.sort((a, b) => prioRank(a) - prioRank(b) || pos.get(a) - pos.get(b));
+      }
+      order.forEach((g, i) => {
+        g.oi = i;
+      });
+    } else if (phase === 0 && useScreen) {
       // a finer estimate for the most promising ones
       phase = 0.5;
       nextIdx = 0;
@@ -2311,6 +2345,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   };
   // run(task, deliver): hand one task to an executor; deliver(answer) when done
   const pump = run => {
+    pumpRun = run;
     while (!cancelled && phase < 4) {
       const t = nextTask();
       if (t) {
@@ -2323,10 +2358,46 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
         continue;
       }
       if (inFlight > 0) return;
-      advance();
+      if (advance() === false) return; // waiting for the network's ranking
       report();
     }
   };
+  // the network's ranking of every position (a separate worker; see runAiJobs)
+  if (netOrder) {
+    const k2 = rs => rs.map(g => ({
+      rows: Array.from(g.state.rows),
+      bank: Array.from(g.state.bank),
+      usedA: g.state.usedA,
+      usedB: g.state.usedB
+    }));
+    const job = runAiJobs([{
+      type: 'aiValues',
+      classic: !!classicMode,
+      k: 2,
+      states: k2(groups),
+      rows: Array.from(state.rows),
+      bank: Array.from(state.bank),
+      usedA: state.usedA,
+      usedB: state.usedB
+    }]);
+    job.promise.then(rs => {
+      if (cancelled) return;
+      rs[0].values.forEach((u, i) => {
+        groups[i].net = u;
+      });
+      netState = 'ready';
+    }, () => {
+      netState = 'failed';
+    }).then(() => {
+      if (!cancelled && waitingNet && pumpRun) {
+        waitingNet = false;
+        pump(pumpRun);
+      }
+    });
+    workers.push({
+      terminate: () => job.cancel()
+    });
+  }
   const finish = (t, r) => {
     inFlight--;
     if (cancelled) return;
@@ -2355,11 +2426,15 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
       const beats = m.phase === 1 ? v => m.best === null || cmp3(v, m.best) >= 0 : v => m.best === null || cmp(v, m.best) > 0 || cmp(v, m.best) === 0 && m.tieWins;
       const bound = m.bound || solver.positionBound(st);
       solver.exactLoss = m.phase !== 1;
-      const v = solver.valueWithCutoff(st, bound, beats);
+      const v = solver.valueWithCutoff(st, bound, beats, {
+        order: m.order || null,
+        record: true
+      });
       solver.exactLoss = false;
       return {
         v,
-        bound: m.bound ? undefined : bound
+        bound: m.bound ? undefined : bound,
+        per: v && solver.lastPer ? solver.lastPer : null
       };
     };
     const take = t => {
@@ -2407,9 +2482,12 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
     groups.forEach(g => {
       g.done = false;
     });
+    rollOrder = null;
+    if (netState === 'pending') netState = 'failed'; // (its worker was stopped too)
     runOnMainThread();
   };
-  const nWorkers = Math.max(1, Math.min(opts && opts.maxWorkers || 8, (navigator.hardwareConcurrency || 2) - 1));
+  // one worker per spare core (up to 12; each keeps its caches to about 0.3 GB)
+  const nWorkers = Math.max(1, Math.min(opts && opts.maxWorkers || 12, (navigator.hardwareConcurrency || 2) - 1));
   try {
     const idle = [];
     const runOnWorker = t => {

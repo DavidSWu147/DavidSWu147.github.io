@@ -68,7 +68,13 @@ End Round keeps the suggested booking. While the hint is active, the cells it
 booked are highlighted in gold; ending the round returns them to the usual colours.
 
 In round 8 the exact search can take from seconds to far longer (see "Round 8"
-below), so it runs in the background on Web Workers (one per spare core, up to 8).
+below), so it runs in the background on Web Workers (one per spare core, up to 12).
+Each worker keeps its solver caches small (20,000 tables, 200,000 round-10 positions):
+with the solver's defaults one worker grew to about 1.4 GB on a big Sequence decision,
+and a tab with 7 of them was killed by the browser. With the smaller caches a 7-worker
+search levels off at about 2.2 GB for the whole browser, at roughly 20% less speed.
+The computer player's own 30-second Round 8 search uses at most 4 workers, since it can
+run at the same time as your Hint.
 While it works, a gold progress bar and the time so far sit next to the button; the
 blue bar further down is the Round 9 odds preview, a separate job. There is no time
 limit: clicking Hint again stops the search, and so does ending the round, switching
@@ -79,8 +85,12 @@ booked). The Round 9 odds preview then starts by itself.
 
 Big decisions (300 or more possible end positions, nearly always Sequence) would
 take far too long to finish, so the search goes for the likeliest plays first:
-1. every position gets a quick estimate: its Round 9 odds from 11 of the 220 rolls;
-2. the top 96 by that get a finer one, from 44 rolls;
+1. every position is ranked by the computer player's Round 9 network (all of them in
+   well under a second; until October 2026 this was an estimate from 11 of the 220
+   rolls, then 44 rolls for the top 96, which took about a third of the whole search:
+   2.3 core-hours of a 6.4 on an 8,548-position decision. If the network cannot be
+   loaded, the positions go in order of their upper bounds);
+2. (no second step any more);
 3. positions are then solved exactly in that order. After the first 24 the best so
    far is booked, with the note "Best so far · 24 of N plays checked", and the
    gold bar keeps going. Whenever something better turns up it is booked instead
@@ -90,8 +100,20 @@ take far too long to finish, so the search goes for the likeliest plays first:
    found · all plays checked" if the last step changed the booking.
 
 Taking the hint back stops it from booking anything by itself; "Hint ready" then
-offers the latest best. The estimate is only used for the order, so the final answer
-is still exact. On 12 Sequence decisions from self-play with known exact answers
+offers the latest best. The ranking is only used for the order, so the final answer
+is still exact.
+
+Proving the other plays worse is most of the work: on that 8,548-position decision the
+per-roll upper bounds were all 100% against a best of 91.4%, so nearly every position
+had to be partly solved, about 55 of its 660 roll-solves. These now take the rolls in
+the order the best play so far loses on them, worst first (each solve that sets a new
+best sends back its per-roll results). That rules a position out after about as many
+rolls, but those rolls are quicker to solve: 0.89 s instead of 1.68 s per position on
+average over 210 sampled positions. On four decisions with 367-606 positions (2
+workers), the whole search took 275 s instead of 474 s, with the same answers, and
+the first best-so-far came after 2-28 s instead of 42-76 s.
+
+Earlier measurements of the estimate (kept for the record): On 12 Sequence decisions from self-play with known exact answers
 (11 to 1,625 positions), the best play was 1st or 2nd after step 2 every time. Step
 1 alone was as low as 35th once, and ranking by points booked this round put it as
 low as 321st-1,028th. The cost: about 0.3 s per position on one core for the
@@ -133,7 +155,8 @@ Finally, with the digits settled, where to put them among equivalent places:
    without II-B also wins in Classic, where II-B does not exist).
 10. lean left: prefer the cells that come first in reading order (category, row,
    column), so `890_` beats `_890`, and the upper of two identical empty rows is used.
-11. if still tied (`890_` vs `098_`), prefer Sequences written ascending.
+11. if still tied (`890_` vs `098_`, `3344` vs `4433`), prefer Sequences and Ladders written
+    ascending (for Ladders, Y = X + 1 wrapping round: `9900` is ascending, `0099` is not).
 
 Item 6 costs little. In round 9 it only needs the three round-10 category values of
 the tied bookings, which are table lookups. In round 8 the search keeps every position
@@ -376,14 +399,35 @@ With Computer Player:
 How it decides (all in Web Workers, so the page has to be served over http(s), as on
 GitHub Pages):
 - Rounds 1-7: the networks below (`ai/model.json`, or `ai/model-small.json` until that
-  exists), with the top 6 bookings re-checked one round deeper.
-- Round 8: the Round 8 Hint's exact search if it finishes within 30 seconds; otherwise
-  its best so far; if it has nothing yet (big Sequence decisions), the network's choice
-  re-checked with the exact solver.
+  exists), with the top 6 bookings re-checked one round deeper, over all 220 rolls
+  (a few seconds; it used to be 8 random rolls, whose luck alone often decided between
+  near-equal bookings). Estimates within a margin of the best count as tied, and among
+  them the computer books the fewest digits (then the best estimate): 0.5 points of win chance in Rounds 2 and 3, then 0.4, 0.3, 0.2 and 0.1
+  in Rounds 4-7 (`TIE_MARGIN` in `simili-ai.js`). The networks are off by 1-2 points on
+  average in the early rounds, so smaller differences mean nothing. Example: Round 2,
+  bank 403, Ladder, roll 925: the network had 34, nothing, 90, 45 and 23 within 0.11
+  points of each other, and the computer booked 23 (or another of them, by the luck of
+  the 8 rolls); now it books nothing. Over 200 games on the same dice (small model): 78.0% wins with
+  both changes against 76.0% before (104.2 points if win against 104.8), within the noise;
+  the gain is in avoiding plays like that one rather than in the win rate.
+- Round 8: the Round 8 Hint's exact search, on at most 4 workers, ordered by the
+  network: its ranking of all the bookings (a few milliseconds) decides which positions
+  are solved first, and its final choice (with the re-check) goes to the front as soon as
+  it is known. If the search finishes within 30 seconds, its answer; otherwise its best so
+  far, provided it has already solved the network's choice (so it is at least as good);
+  otherwise the network's choice. (Before this, the search went in order of its upper
+  bounds and only reported a best so far after 24 positions; in a game where the computer
+  booked 5 and an extra 4 in Matching (94.7% to win) the best play, the 5 alone (97.4%),
+  was 82nd of 137 in that order and 11th in the network's.)
 - Rounds 9 and 10: exact (the same solver as the Hint).
 
-Games with the computer are logged (with the setting) but not counted in the game
-statistics yet.
+Games with the computer have statistics pages of their own: "1 Computer Player" (the
+computer alone) and "Human vs Computer" (you as Player 1), each for single games and
+match play, and a line each in the Quad Bonus Statistics. The Display setting "Merge
+Ver. Stats" (default) shows Modern and Classic games together on one page per mode
+(10 pages in all); "Split Ver. Stats" gives each version its own page (18 pages).
+Both versions are always stored separately, and the computer pages come after the
+original ones in the saved `?stats=` string, so strings saved before still load.
 
 ## Computer player for the whole game (`ai/simili-ai.js`)
 
@@ -427,6 +471,13 @@ out to matter:
     preferred Matching in Round 1 by 0.00000001, both just network noise; now it books
     nothing after any Round 1 roll and the three categories tie (Sequence first, as in
     the solver's order);
+  - one renaming per *decision*: every option of a booking (or every category, for a
+    roll) is judged in the canonical renaming of the position being decided, so the
+    network's small digit-specific errors are the same for all the options compared.
+    Renaming each option on its own made them differ between options and played worse
+    (72.5% against 78.3% on 240 games). Per decision against no renaming at all, over
+    480 games on 4 sets of dice: 76.0% against 77.1%, which is within the noise (the two
+    only differ on near-ties; set by set the gap went both ways, from -5.9 to +7.5);
   - in training it still learns from all 20 renamings of each labelled position (20
     examples each). On round-9 starts with 1,500 positions that took the error from 11
     to 8.7 points of win chance; tested on canonical inputs it is 7.8 points with 5,100

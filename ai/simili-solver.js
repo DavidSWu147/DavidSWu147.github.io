@@ -1531,22 +1531,31 @@
   };
   // Round-9 start value, abandoning categories that cannot satisfy beats(value).
   // Returns the exact value, or null if it cannot satisfy beats().
-  Solver.prototype.valueWithCutoff = function (st, bound, beats) {
+  // opts.order: the rolls (indices into ROLLS) in the order to solve them, the same for
+  // every category (e.g. the best play's losing rolls first: those tend to rule a play
+  // out soonest, and they are quick to solve); otherwise most at stake first.
+  // opts.record: keep the win part of each roll's value for the category that gives the
+  // returned best (this.lastPer, a Float64Array over ROLLS), to make such an order from.
+  Solver.prototype.valueWithCutoff = function (st, bound, beats, opts) {
     let best = null;
     const order = [0, 1, 2].sort((a, b) => cmp(bound.tot[b], bound.tot[a]));
     const bb = new Int8Array(10);
     const ok = v => beats(v) && (best === null || cmp(v, best) > 0);
+    const rec = opts && opts.record ? new Float64Array(ROLLS.length) : null;
+    this.lastPer = null;
     for (const c of order) {
       if (!ok(bound.tot[c])) continue;
       const part = [0, 0, 0, 0], rem = bound.tot[c].slice(), s = [0, 0, 0, 0];
       let done = true;
       // rolls with the most at stake first, so a hopeless category is dropped early
       const per = bound.per[c];
-      const idx = ROLLS.map((r, i) => i).sort((x, y) => ROLLS[y].w * per[y][0] - ROLLS[x].w * per[x][0] || ROLLS[y].w * per[y][1] - ROLLS[x].w * per[x][1]);
+      const idx = opts && opts.order ? opts.order
+        : ROLLS.map((r, i) => i).sort((x, y) => ROLLS[y].w * per[y][0] - ROLLS[x].w * per[x][0] || ROLLS[y].w * per[y][1] - ROLLS[x].w * per[x][1]);
       for (let k = 0; k < ROLLS.length; k++) {
         const ri = idx[k], r = ROLLS[ri];
         bb.set(st.bank); for (const d of r.digits) bb[d]++;
         const v = this.fastFinal && this.fast2 ? this.bestAfterRollFast(st, c, bb) : this.bestAfterRoll(st, c, bb, 2);
+        if (rec) rec[ri] = v[0];
         const u = bound.per[c][ri];
         if (cmp(v, u) > 0) this.boundViolations = (this.boundViolations || 0) + 1;
         for (let j = 0; j < 4; j++) { part[j] += r.w * v[j]; rem[j] -= r.w * u[j]; s[j] = part[j] + rem[j]; }
@@ -1554,7 +1563,7 @@
         if (this.deadline && Date.now() > this.deadline) return undefined;
         if (!ok(s)) { done = false; break; }
       }
-      if (done && (best === null || cmp(part, best) > 0)) best = part;
+      if (done && (best === null || cmp(part, best) > 0)) { best = part; if (rec) this.lastPer = rec.slice(); }
     }
     return best !== null && beats(best) ? best : null;
   };
