@@ -13,6 +13,10 @@
 //  - { type: 'aiBooking', k, cat, bankList, recheckRolls }: the computer player's booking
 importScripts('simili-solver.js');
 let solver = null, solverClassic = null;
+// Smaller caches than the solver's defaults: a page runs up to 8 of these workers at once,
+// and with the defaults one worker reached about 1.4 GB on a big Round 8 Sequence search
+// (enough for the browser to kill the page). With these, about 0.3 GB, at roughly 20% less speed.
+const CACHE = { maxTables: 20000, maxMemo: 200000 };
 // computer player: simili-ai.js and its model (model.json, else the small model-small.json)
 let aiModel = null;
 const aiPlayers = {};
@@ -27,7 +31,7 @@ async function aiJob(m) {
   if (typeof SimiliAI === 'undefined') importScripts('simili-ai.js');
   const model = await loadModel();
   const key = m.classic ? 'c' : 'm';
-  if (!aiPlayers[key]) aiPlayers[key] = new SimiliAI.Player({ classic: !!m.classic, model, solver: new SimiliSolver.Solver({ classic: !!m.classic, exactLoss: false }) });
+  if (!aiPlayers[key]) aiPlayers[key] = new SimiliAI.Player({ classic: !!m.classic, model, solver: new SimiliSolver.Solver({ classic: !!m.classic, exactLoss: false, ...CACHE }) });
   const pl = aiPlayers[key];
   const st = SimiliSolver.makeState(m.rows, m.bank, m.usedA, m.usedB);
   if (m.type === 'aiCategory') {
@@ -45,7 +49,7 @@ self.onmessage = e => {
     aiJob(m).then(r => self.postMessage({ id: m.id, ...r }), err => self.postMessage({ id: m.id, error: String(err && err.message || err) }));
     return;
   }
-  if (!solver || solverClassic !== m.classic) { solver = new SimiliSolver.Solver({ classic: m.classic, exactLoss: false }); solverClassic = m.classic; }
+  if (!solver || solverClassic !== m.classic) { solver = new SimiliSolver.Solver({ classic: m.classic, exactLoss: false, ...CACHE }); solverClassic = m.classic; }
   const st = SimiliSolver.makeState(m.rows, m.bank, m.usedA, m.usedB);
   if (m.type === 'screen') {
     self.postMessage({ id: m.id, screen: solver.screenValue(st, 'sample', m.sample) });

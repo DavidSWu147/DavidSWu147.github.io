@@ -1609,8 +1609,11 @@ function ToggleSwitch({
 const previewMainSolvers = {};
 function previewMainSolver(classicMode) {
   const k = classicMode ? 'c' : 'm';
+  // caches smaller than the solver's defaults (which can grow past 1 GB), as in the workers
   if (!previewMainSolvers[k]) previewMainSolvers[k] = new SimiliSolver.Solver({
-    classic: classicMode
+    classic: classicMode,
+    maxTables: 40000,
+    maxMemo: 400000
   });
   return previewMainSolvers[k];
 }
@@ -1899,7 +1902,8 @@ function computerCategory(state, k, classicMode) {
     let b = 0;
     for (let c = 1; c < 3; c++) {
       // exact values (rounds 9-10): win, points if win, Quad; estimates: one combined score
-      const better = k <= 2 ? SimiliSolver.compareFirst3(rs[c].raw, rs[b].raw) > 0 : rs[c].value.u > rs[b].value.u;
+      // (estimates closer than 1e-7 are equal; ties keep S, M, L order)
+      const better = k <= 2 ? SimiliSolver.compareFirst3(rs[c].raw, rs[b].raw) > 0 : rs[c].value.u > rs[b].value.u + 1e-7;
       if (better) b = c;
     }
     return SimiliSolver.CAT_NAMES[b];
@@ -1941,10 +1945,12 @@ function computerBooking(state, cat, bankList, k, classicMode) {
       net.promise.then(rs => {
         netBest = rs[0].best;
       }, () => {});
+      // at most 4 workers, so it can run alongside a Round 8 Hint without the page running out of memory
       stop = startRound8Job(state, cat, bankList, classicMode, () => {}, best => {
         soFar = best;
       }, finish, {
-        reportAll: true
+        reportAll: true,
+        maxWorkers: 4
       });
       timer = setTimeout(() => {
         if (soFar) finish(soFar);else if (netBest) finish(netBest);else net.promise.then(rs => finish(rs[0].best), reject);
@@ -2309,7 +2315,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
     refined = 0;
     runOnMainThread();
   };
-  const nWorkers = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1));
+  const nWorkers = Math.max(1, Math.min(opts && opts.maxWorkers || 8, (navigator.hardwareConcurrency || 2) - 1));
   try {
     const idle = [];
     const runOnWorker = t => {
@@ -3361,6 +3367,25 @@ function deserializeMatchStats(bytes, pos) {
     matchesDrawn: d()
   };
 }
+
+// Stats pages, by mode. The first 8 are the original ones; the games with the computer
+// ('cpu': 1 computer player, 'hvc': you as Player 1 against the computer as Player 2)
+// come after them in the saved string, so older ?stats= strings still load (the new
+// pages then start at zero).
+const STATS_KEYS_HUMAN = ['1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic', '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'];
+const STATS_KEYS_CPU = ['cpu-single-modern', 'cpu-single-classic', 'cpu-match-modern', 'cpu-match-classic', 'hvc-single-modern', 'hvc-single-classic', 'hvc-match-modern', 'hvc-match-classic'];
+const STATS_KEYS = [...STATS_KEYS_HUMAN, ...STATS_KEYS_CPU];
+// pages with two players' columns
+const statsKeyIs2p = key => key.startsWith('2p') || key.startsWith('hvc');
+const statsKeyFor = (computerPlayer, twoPlayer, matchPlay, classicMode) => `${computerPlayer ? twoPlayer ? 'hvc' : 'cpu' : twoPlayer ? '2p' : '1p'}-${matchPlay ? 'match' : 'single'}-${classicMode ? 'classic' : 'modern'}`;
+// Modern + Classic together (the "Merge Version Stats" view): counts add up, high scores take the larger
+function mergeStatsObj(a, b) {
+  const out = {};
+  for (const k of Object.keys(a)) {
+    if (k === 'highScore') out[k] = Math.max(a[k] || 0, b && b[k] || 0);else if (Array.isArray(a[k])) out[k] = a[k].map((v, i) => v + (b && b[k] && b[k][i] || 0));else if (a[k] && typeof a[k] === 'object') out[k] = mergeStatsObj(a[k], b && b[k]);else out[k] = (a[k] || 0) + (b && b[k] || 0);
+  }
+  return out;
+}
 function encodeStats(rollStats, gameStats, quadStats) {
   const bytes = [1]; // version 1
 
@@ -3375,28 +3400,28 @@ function encodeStats(rollStats, gameStats, quadStats) {
   for (let i = 0; i < 10; i++) encodeVarInt(bytes, rollStats.digitCounts[i]);
   for (let i = 0; i < 30; i++) encodeVarInt(bytes, (rollStats.positionCounts || [])[i] || 0);
 
-  // Game stats in fixed order
-  const pageOrder = ['1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic', '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'];
-  for (const key of pageOrder) {
-    const page = gameStats[key];
-    const is2p = key.startsWith('2p');
-    const isMatch = key.includes('match');
-    serializePlayerStats(bytes, page.p1);
-    if (is2p) serializePlayerStats(bytes, page.p2);
-    if (isMatch) serializeMatchStats(bytes, page.match);
-    if (is2p && isMatch) serializeMatchStats(bytes, page.matchP2);
-  }
-
-  // Quad stats
-  for (const key of pageOrder) {
-    const qs = quadStats[key];
-    encodeVarInt(bytes, qs.qbOn);
-    encodeVarInt(bytes, qs.qbGetP1);
-    encodeVarInt(bytes, qs.qbGetP2);
-    encodeVarInt(bytes, qs.pityP1 || 0);
-    encodeVarInt(bytes, qs.pityP2 || 0);
-    encodeVarInt(bytes, qs.nonBonusQuadP1 || 0);
-    encodeVarInt(bytes, qs.nonBonusQuadP2 || 0);
+  // Game stats in fixed order, then their Quad stats; first the original 8 pages, then
+  // the 8 with the computer
+  for (const pageOrder of [STATS_KEYS_HUMAN, STATS_KEYS_CPU]) {
+    for (const key of pageOrder) {
+      const page = gameStats[key];
+      const is2p = statsKeyIs2p(key);
+      const isMatch = key.includes('match');
+      serializePlayerStats(bytes, page.p1);
+      if (is2p) serializePlayerStats(bytes, page.p2);
+      if (isMatch) serializeMatchStats(bytes, page.match);
+      if (is2p && isMatch) serializeMatchStats(bytes, page.matchP2);
+    }
+    for (const key of pageOrder) {
+      const qs = quadStats[key];
+      encodeVarInt(bytes, qs.qbOn);
+      encodeVarInt(bytes, qs.qbGetP1);
+      encodeVarInt(bytes, qs.qbGetP2);
+      encodeVarInt(bytes, qs.pityP1 || 0);
+      encodeVarInt(bytes, qs.pityP2 || 0);
+      encodeVarInt(bytes, qs.nonBonusQuadP1 || 0);
+      encodeVarInt(bytes, qs.nonBonusQuadP2 || 0);
+    }
   }
 
   // Checksum over all data bytes (before trimming)
@@ -3446,7 +3471,7 @@ function decodeStats(str) {
       i: 1
     };
     // Pad with zeros to ensure varint reads don't go out of bounds
-    while (bytes.length < 600) bytes.push(0);
+    while (bytes.length < 1500) bytes.push(0);
     const d = () => decodeVarInt(bytes, pos);
     const rollStats = {
       games: d(),
@@ -3463,30 +3488,33 @@ function decodeStats(str) {
         length: 30
       }, () => d())
     };
-    const pageOrder = ['1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic', '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'];
-    const gameStats = {};
-    for (const key of pageOrder) {
-      const is2p = key.startsWith('2p');
-      const isMatch = key.includes('match');
-      const page = {
-        p1: deserializePlayerStats(bytes, pos)
-      };
-      if (is2p) page.p2 = deserializePlayerStats(bytes, pos);
-      if (isMatch) page.match = deserializeMatchStats(bytes, pos);
-      if (is2p && isMatch) page.matchP2 = deserializeMatchStats(bytes, pos);
-      gameStats[key] = page;
-    }
-    const quadStats = {};
-    for (const key of pageOrder) {
-      quadStats[key] = {
-        qbOn: d(),
-        qbGetP1: d(),
-        qbGetP2: d(),
-        pityP1: d(),
-        pityP2: d(),
-        nonBonusQuadP1: d(),
-        nonBonusQuadP2: d()
-      };
+
+    // (a string saved before the computer pages existed ends early: those read as zeros)
+    const gameStats = {},
+      quadStats = {};
+    for (const pageOrder of [STATS_KEYS_HUMAN, STATS_KEYS_CPU]) {
+      for (const key of pageOrder) {
+        const is2p = statsKeyIs2p(key);
+        const isMatch = key.includes('match');
+        const page = {
+          p1: deserializePlayerStats(bytes, pos)
+        };
+        if (is2p) page.p2 = deserializePlayerStats(bytes, pos);
+        if (isMatch) page.match = deserializeMatchStats(bytes, pos);
+        if (is2p && isMatch) page.matchP2 = deserializeMatchStats(bytes, pos);
+        gameStats[key] = page;
+      }
+      for (const key of pageOrder) {
+        quadStats[key] = {
+          qbOn: d(),
+          qbGetP1: d(),
+          qbGetP2: d(),
+          pityP1: d(),
+          pityP2: d(),
+          nonBonusQuadP1: d(),
+          nonBonusQuadP2: d()
+        };
+      }
     }
     return {
       rollStats,
@@ -3646,6 +3674,7 @@ window.Simili = function Simili() {
   const [verticalCategories, setVerticalCategories] = useState(false);
   const [cellHints, setCellHints] = useState(false);
   const [extendedStats, setExtendedStats] = useState(false);
+  const [splitVersionStats, setSplitVersionStats] = useState(false); // false: Modern and Classic on one page
   const [musicVolume, setMusicVolume] = useState(0); // 0 to 1
 
   const [crossOut, setCrossOut] = useState(false);
@@ -3729,8 +3758,7 @@ window.Simili = function Simili() {
     positionCounts: Array(30).fill(0)
   });
 
-  // Per-page game statistics. Keys: '1p-single-modern', '1p-single-classic', '1p-match-modern', '1p-match-classic',
-  //   '2p-single-modern', '2p-single-classic', '2p-match-modern', '2p-match-classic'
+  // Per-page game statistics, keyed by STATS_KEYS ('1p-single-modern', ..., 'hvc-match-classic')
   const emptyPlayerStats = () => ({
     highScore: 0,
     gamesStarted: 0,
@@ -3797,16 +3825,7 @@ window.Simili = function Simili() {
     } // matchesWon is per-player for 2p
     return s;
   };
-  const [gameStats, setGameStats] = useState({
-    '1p-single-modern': initPageStats(false, false),
-    '1p-single-classic': initPageStats(false, false),
-    '1p-match-modern': initPageStats(false, true),
-    '1p-match-classic': initPageStats(false, true),
-    '2p-single-modern': initPageStats(true, false),
-    '2p-single-classic': initPageStats(true, false),
-    '2p-match-modern': initPageStats(true, true),
-    '2p-match-classic': initPageStats(true, true)
-  });
+  const [gameStats, setGameStats] = useState(() => Object.fromEntries(STATS_KEYS.map(key => [key, initPageStats(statsKeyIs2p(key), key.includes('match'))])));
 
   // Quad Bonus stats: per page key, track games with QB on and QB achieved
   const initQB = () => ({
@@ -3818,16 +3837,7 @@ window.Simili = function Simili() {
     nonBonusQuadP1: 0,
     nonBonusQuadP2: 0
   });
-  const [quadStats, setQuadStats] = useState({
-    '1p-single-modern': initQB(),
-    '1p-single-classic': initQB(),
-    '1p-match-modern': initQB(),
-    '1p-match-classic': initQB(),
-    '2p-single-modern': initQB(),
-    '2p-single-classic': initQB(),
-    '2p-match-modern': initQB(),
-    '2p-match-classic': initQB()
-  });
+  const [quadStats, setQuadStats] = useState(() => Object.fromEntries(STATS_KEYS.map(key => [key, initQB()])));
 
   // Round 10 win chances (computed at start of round 10)
   const [round10WinChances, setRound10WinChances] = useState(null);
@@ -4703,9 +4713,9 @@ window.Simili = function Simili() {
         }));
       }
 
-      // Update game statistics (for non-seeded games; not yet for games with the computer)
-      if (!isSeededGame && !computerPlayer) {
-        const pageKey = `${twoPlayer ? '2p' : '1p'}-${matchPlay ? 'match' : 'single'}-${classicMode ? 'classic' : 'modern'}`;
+      // Update game statistics (for non-seeded games; games with the computer have pages of their own)
+      if (!isSeededGame) {
+        const pageKey = statsKeyFor(computerPlayer, twoPlayer, matchPlay, classicMode);
         const isFinished = !abandoned;
 
         // Track sudden death games
@@ -4857,7 +4867,7 @@ window.Simili = function Simili() {
   const prevMatchPhaseRef = useRef(matchPhase);
   useEffect(() => {
     if (matchPhase === 'done' && prevMatchPhaseRef.current !== 'done' && matchPlay && !isSeededGame) {
-      const pageKey = `${twoPlayer ? '2p' : '1p'}-match-${classicMode ? 'classic' : 'modern'}`;
+      const pageKey = statsKeyFor(computerPlayer, twoPlayer, true, classicMode);
       const wasAbandoned = matchAbandoned;
       const wasDrawn = !wasAbandoned && twoPlayer && (() => {
         // A draw happens when the user clicks "Call it a Draw" — matchScores should show a tie
@@ -5402,12 +5412,12 @@ window.Simili = function Simili() {
       fontWeight: 'bold',
       color: '#2a6fdb'
     }
-  }, "Player 1"), /*#__PURE__*/React.createElement("div", null, "Total: ", matchScores.reduce((s, g) => s + g.p1, 0))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, nameOf(0)), /*#__PURE__*/React.createElement("div", null, "Total: ", matchScores.reduce((s, g) => s + g.p1, 0))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 'bold',
       color: '#d4442a'
     }
-  }, "Player 2"), /*#__PURE__*/React.createElement("div", null, "Total: ", matchScores.reduce((s, g) => s + (g.p2 || 0), 0)))) : /*#__PURE__*/React.createElement("div", null, "Running Total: ", matchScores.reduce((s, g) => s + g.p1, 0))), /*#__PURE__*/React.createElement("div", {
+  }, nameOf(1)), /*#__PURE__*/React.createElement("div", null, "Total: ", matchScores.reduce((s, g) => s + (g.p2 || 0), 0)))) : /*#__PURE__*/React.createElement("div", null, "Running Total: ", matchScores.reduce((s, g) => s + g.p1, 0))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       marginBottom: 12,
@@ -5463,7 +5473,7 @@ window.Simili = function Simili() {
         fontSize: 18,
         color: '#2a6fdb'
       }
-    }, "Player 1"), /*#__PURE__*/React.createElement("div", {
+    }, nameOf(0)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 28
       }
@@ -5478,7 +5488,7 @@ window.Simili = function Simili() {
         fontSize: 18,
         color: '#d4442a'
       }
-    }, "Player 2"), /*#__PURE__*/React.createElement("div", {
+    }, nameOf(1)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 28
       }
@@ -5693,7 +5703,7 @@ window.Simili = function Simili() {
         if (!prev) {
           setShowSettings(false);
           setShowGameLogs(false);
-          setStatsPageIndex(9);
+          setStatsPageIndex(splitVersionStats ? 17 : 9); /* Roll Statistics (with the save string) */
         }
         return !prev;
       }),
@@ -5836,6 +5846,19 @@ window.Simili = function Simili() {
     onChange: setExtendedStats,
     leftLabel: "Hide Extra Stats",
     rightLabel: "Show Extra Stats"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: splitVersionStats,
+    onChange: v => {
+      // stay on the same mode's page (merged page i <-> its Modern page 2i; Quad and Roll last)
+      setStatsPageIndex(i => v ? i < 8 ? 2 * i : i + 8 : i < 16 ? Math.floor(i / 2) : i - 8);
+      setSplitVersionStats(v);
+    },
+    leftLabel: "Merge Version Stats",
+    rightLabel: "Split Version Stats"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
@@ -6250,7 +6273,32 @@ window.Simili = function Simili() {
       }, formatBookedNotation(log.players[0].bookedPerRound[ri]))))))));
     }));
   })(), showStatistics && (() => {
-    const statsPages = ['1 Player, Single Game, Modern Version', '1 Player, Single Game, Classic Version', '1 Player, Match Play, Modern Version', '1 Player, Match Play, Classic Version', '2 Players, Single Game, Modern Version', '2 Players, Single Game, Classic Version', '2 Players, Match Play, Modern Version', '2 Players, Match Play, Classic Version', 'Quad Bonus Statistics', 'Roll Statistics'];
+    // one page per mode (Modern and Classic merged, or one page each), then Quad and Roll
+    const modeNames = [['1p', '1 Human Player'], ['2p', '2 Human Players'], ['cpu', '1 Computer Player'], ['hvc', 'Human vs Computer']];
+    const modePages = [];
+    for (const [m, name] of modeNames) {
+      for (const [g, gName] of [['single', 'Single Game'], ['match', 'Match Play']]) {
+        if (splitVersionStats) {
+          modePages.push({
+            title: `${name}, ${gName}, Modern Version`,
+            keys: [`${m}-${g}-modern`]
+          });
+          modePages.push({
+            title: `${name}, ${gName}, Classic Version`,
+            keys: [`${m}-${g}-classic`]
+          });
+        } else modePages.push({
+          title: `${name}, ${gName}`,
+          keys: [`${m}-${g}-modern`, `${m}-${g}-classic`]
+        });
+      }
+    }
+    const statsPageInfo = [...modePages, {
+      title: 'Quad Bonus Statistics'
+    }, {
+      title: 'Roll Statistics'
+    }];
+    const statsPages = statsPageInfo.map(p => p.title);
     const totalStatsPages = statsPages.length;
     const si = statsPageIndex >= 0 && statsPageIndex < totalStatsPages ? statsPageIndex : 0;
     const goStatsPrev = () => setStatsPageIndex(si <= 0 ? totalStatsPages - 1 : si - 1);
@@ -6322,7 +6370,22 @@ window.Simili = function Simili() {
         marginBottom: 8
       }
     }, statsPages[si]), statsPages[si] === 'Quad Bonus Statistics' ? (() => {
-      const keys = [['1p-single-modern', '1P Single Modern', false], ['1p-single-classic', '1P Single Classic', false], ['1p-match-modern', '1P Match Modern', false], ['1p-match-classic', '1P Match Classic', false], ['2p-single-modern', '2P Single Modern', true], ['2p-single-classic', '2P Single Classic', true], ['2p-match-modern', '2P Match Modern', true], ['2p-match-classic', '2P Match Classic', true]];
+      // one line per mode (both versions added up when merged)
+      const modeShort = {
+        '1p': '1P',
+        '2p': '2P',
+        cpu: 'Computer',
+        hvc: 'Human vs Computer'
+      };
+      const keys = modePages.map(({
+        keys: ks
+      }) => {
+        const [m, g, v] = ks[0].split('-');
+        const label = `${modeShort[m]} ${g === 'match' ? 'Match' : 'Single'}${ks.length === 1 ? v === 'classic' ? ' Classic' : ' Modern' : ''}`;
+        return [ks, label, statsKeyIs2p(ks[0])];
+      });
+      const sumQuad = ks => ks.slice(1).reduce((a, k) => mergeStatsObj(a, quadStats[k]), quadStats[ks[0]]);
+      const finishedGames = ks => ks.reduce((t, k) => t + gameStats[k].p1.gamesFinished, 0);
       const thStyle = {
         padding: '4px 6px',
         borderBottom: '1.5px solid #999',
@@ -6347,10 +6410,9 @@ window.Simili = function Simili() {
         return v === 100 ? '100.0%' : v.toFixed(2) + '%';
       };
       const rows = [];
-      for (const [key, label, is2p] of keys) {
-        const qs = quadStats[key];
-        const gs = gameStats[key];
-        const totalGames = gs.p1.gamesFinished;
+      for (const [ks, label, is2p] of keys) {
+        const qs = sumQuad(ks);
+        const totalGames = finishedGames(ks);
         // QB On
         rows.push({
           label: `Quad Bonus On, ${label}`,
@@ -6369,10 +6431,9 @@ window.Simili = function Simili() {
         });
       }
       if (extendedStats) {
-        for (const [key, label, is2p] of keys) {
-          const qs = quadStats[key];
-          const gs = gameStats[key];
-          const totalGames = gs.p1.gamesFinished;
+        for (const [ks, label, is2p] of keys) {
+          const qs = sumQuad(ks);
+          const totalGames = finishedGames(ks);
           const qbOffGames = totalGames - qs.qbOn;
           rows.push({
             label: `Pity Bonus Get, ${label}`,
@@ -6530,19 +6591,8 @@ window.Simili = function Simili() {
         style: tdStyle
       }, pg))))));
     })() : (() => {
-      // Map page title to data key
-      const pageMap = {
-        '1 Player, Single Game, Modern Version': '1p-single-modern',
-        '1 Player, Single Game, Classic Version': '1p-single-classic',
-        '1 Player, Match Play, Modern Version': '1p-match-modern',
-        '1 Player, Match Play, Classic Version': '1p-match-classic',
-        '2 Players, Single Game, Modern Version': '2p-single-modern',
-        '2 Players, Single Game, Classic Version': '2p-single-classic',
-        '2 Players, Match Play, Modern Version': '2p-match-modern',
-        '2 Players, Match Play, Classic Version': '2p-match-classic'
-      };
-      const pageKey = pageMap[statsPages[si]];
-      if (!pageKey) return /*#__PURE__*/React.createElement("div", {
+      const pageKeys = statsPageInfo[si].keys;
+      if (!pageKeys) return /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 11,
           opacity: 0.4,
@@ -6550,10 +6600,15 @@ window.Simili = function Simili() {
           padding: 4
         }
       }, "No data yet.");
-      const page = gameStats[pageKey];
-      const is2p = pageKey.startsWith('2p');
+      const pageKey = pageKeys[0];
+      // merged: Modern and Classic added up; the Modern-only bonuses are counted
+      // against Modern games only
+      const merged = pageKeys.length > 1;
+      const page = merged ? mergeStatsObj(gameStats[pageKeys[0]], gameStats[pageKeys[1]]) : gameStats[pageKey];
+      const modernPage = merged ? gameStats[pageKeys[0]] : page;
+      const is2p = statsKeyIs2p(pageKey);
       const isMatch = pageKey.includes('match');
-      const isClassic = pageKey.includes('classic');
+      const isClassic = !merged && pageKey.includes('classic');
       const pct = (val, denom) => {
         if (denom <= 0) return '—';
         const v = val / denom * 100;
@@ -6714,14 +6769,17 @@ window.Simili = function Simili() {
             pg: pct(p.seqBonusI, M)
           });
           rows.push({
-            label: isClassic ? 'Sequence Bonus II Unlocks' : 'Sequence Bonus II-A Unlocks',
+            label: isClassic ? 'Sequence Bonus II Unlocks' : merged ? 'Sequence Bonus II / II-A Unlocks' : 'Sequence Bonus II-A Unlocks',
             total: p.seqBonusIIA,
             pg: pct(p.seqBonusIIA, M)
           });
+          // Modern-only bonuses: per Modern game finished
+          const MM = merged ? modernPage[pLabel].gamesFinished : M;
+          const modernTag = merged ? ' (Modern)' : '';
           if (!isClassic) rows.push({
-            label: 'Sequence Bonus II-B Unlocks',
+            label: 'Sequence Bonus II-B Unlocks' + modernTag,
             total: p.seqBonusIIB,
-            pg: pct(p.seqBonusIIB, M)
+            pg: pct(p.seqBonusIIB, MM)
           });
           rows.push({
             label: 'Sequence Bonus III Unlocks',
@@ -6730,14 +6788,14 @@ window.Simili = function Simili() {
           });
           if (!isClassic) {
             rows.push({
-              label: 'Modern Bonus III-M Unlocks',
+              label: 'Modern Bonus III-M Unlocks' + modernTag,
               total: p.modernBonusIIIM,
-              pg: pct(p.modernBonusIIIM, M)
+              pg: pct(p.modernBonusIIIM, MM)
             });
             rows.push({
-              label: 'Modern Bonus III-L Unlocks',
+              label: 'Modern Bonus III-L Unlocks' + modernTag,
               total: p.modernBonusIIIL,
-              pg: pct(p.modernBonusIIIL, M)
+              pg: pct(p.modernBonusIIIL, MM)
             });
           }
           rows.push({
