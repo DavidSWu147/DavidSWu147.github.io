@@ -6374,9 +6374,9 @@ window.Simili = function Simili() {
       const modeShort = {
         '1p': '1P',
         '2p': '2P',
-        cpu: 'Computer',
-        hvc: 'Human vs Computer'
-      };
+        cpu: 'CPU',
+        hvc: 'Human vs CPU'
+      }; // ("Computer" only in page titles)
       const keys = modePages.map(({
         keys: ks
       }) => {
@@ -6769,15 +6769,14 @@ window.Simili = function Simili() {
             pg: pct(p.seqBonusI, M)
           });
           rows.push({
-            label: isClassic ? 'Sequence Bonus II Unlocks' : merged ? 'Sequence Bonus II / II-A Unlocks' : 'Sequence Bonus II-A Unlocks',
+            label: isClassic || merged ? 'Sequence Bonus II Unlocks' : 'Sequence Bonus II-A Unlocks',
             total: p.seqBonusIIA,
             pg: pct(p.seqBonusIIA, M)
           });
           // Modern-only bonuses: per Modern game finished
           const MM = merged ? modernPage[pLabel].gamesFinished : M;
-          const modernTag = merged ? ' (Modern)' : '';
           if (!isClassic) rows.push({
-            label: 'Sequence Bonus II-B Unlocks' + modernTag,
+            label: 'Sequence Bonus II-B Unlocks',
             total: p.seqBonusIIB,
             pg: pct(p.seqBonusIIB, MM)
           });
@@ -6788,12 +6787,12 @@ window.Simili = function Simili() {
           });
           if (!isClassic) {
             rows.push({
-              label: 'Modern Bonus III-M Unlocks' + modernTag,
+              label: 'Modern Bonus III-M Unlocks',
               total: p.modernBonusIIIM,
               pg: pct(p.modernBonusIIIM, MM)
             });
             rows.push({
-              label: 'Modern Bonus III-L Unlocks' + modernTag,
+              label: 'Modern Bonus III-L Unlocks',
               total: p.modernBonusIIIL,
               pg: pct(p.modernBonusIIIL, MM)
             });
