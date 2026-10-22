@@ -11,6 +11,7 @@
 //  - { type: 'aiCategory', k, cat }: the computer player's value for one category at the
 //    start of a round with k rounds left (simili-ai.js; exact for k <= 2)
 //  - { type: 'aiBooking', k, cat, bankList, recheckRolls }: the computer player's booking
+//  - { type: 'aiRank', k, cat, bankList, top }: its `top` bookings by the network alone, best first
 importScripts('simili-solver.js');
 let solver = null, solverClassic = null;
 // Smaller caches than the solver's defaults: a page runs up to 8 of these workers at once,
@@ -39,13 +40,15 @@ async function aiJob(m) {
     const v = pl.categoryValues(st, m.k, undefined, false, [m.cat])[0];
     return { value: { v, u: SimiliAI.utility(v) } };
   }
+  // the network's ranking of the bookings (orders the computer's exact Round 8 search)
+  if (m.type === 'aiRank') return { ranked: pl.rankBookings(st, m.cat, m.bankList, m.k, m.top || 40) };
   const rolls = [];
   for (let i = 0; i < (m.recheckRolls || 8); i++) rolls.push([0, 1, 2].map(() => Math.floor(Math.random() * 10)));
   return { best: pl.chooseBooking(st, m.cat, m.bankList, m.k, { top: 6, rolls }) };
 }
 self.onmessage = e => {
   const m = e.data;
-  if (m.type === 'aiCategory' || m.type === 'aiBooking') {
+  if (m.type === 'aiCategory' || m.type === 'aiBooking' || m.type === 'aiRank') {
     aiJob(m).then(r => self.postMessage({ id: m.id, ...r }), err => self.postMessage({ id: m.id, error: String(err && err.message || err) }));
     return;
   }

@@ -1922,15 +1922,20 @@ function computerBooking(state, cat, bankList, k, classicMode) {
     let stop = () => {},
       timer = null,
       net = null,
+      rank = null,
       settled = false;
     const promise = new Promise((resolve, reject) => {
-      let soFar = null;
+      // soFarCovers: the exact search has checked the network's choice, so its best so far
+      // is at least as good (otherwise the network's choice is used at the time limit)
+      let soFar = null,
+        soFarCovers = false;
       const finish = best => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         stop();
         if (net) net.cancel();
+        if (rank) rank.cancel();
         resolve(best);
       };
       net = runAiJobs([{
@@ -1942,18 +1947,33 @@ function computerBooking(state, cat, bankList, k, classicMode) {
         recheckRolls: 8
       }]);
       let netBest = null;
+      // the exact search checks the network's choice next, and before that its ranking of all
+      // the bookings (fast) sets the order: the likeliest plays first
+      rank = runAiJobs([{
+        ...stateMsg(state, classicMode),
+        type: 'aiRank',
+        k,
+        cat,
+        bankList,
+        top: 40
+      }]);
+      rank.promise.then(rs => {
+        if (stop.prioritize && !settled) stop.prioritize(rs[0].ranked, false);
+      }, () => {});
       net.promise.then(rs => {
         netBest = rs[0].best;
+        if (stop.prioritize && !settled) stop.prioritize([netBest.placements], true);
       }, () => {});
       // at most 4 workers, so it can run alongside a Round 8 Hint without the page running out of memory
-      stop = startRound8Job(state, cat, bankList, classicMode, () => {}, best => {
+      stop = startRound8Job(state, cat, bankList, classicMode, () => {}, (best, info) => {
         soFar = best;
+        soFarCovers = !!(info && info.priorityDone);
       }, finish, {
         reportAll: true,
         maxWorkers: 4
       });
       timer = setTimeout(() => {
-        if (soFar) finish(soFar);else if (netBest) finish(netBest);else net.promise.then(rs => finish(rs[0].best), reject);
+        if (soFar && (soFarCovers || !netBest)) finish(soFar);else if (netBest) finish(netBest);else net.promise.then(rs => finish(rs[0].best), reject);
       }, R8_COMPUTER_SECONDS * 1000);
     });
     return {
@@ -1963,6 +1983,7 @@ function computerBooking(state, cat, bankList, k, classicMode) {
         clearTimeout(timer);
         stop();
         if (net) net.cancel();
+        if (rank) rank.cancel();
       }
     };
   }
@@ -2030,9 +2051,19 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
     soFarSent = false;
   // report the best so far: once the first R8_SHORTLIST positions (in estimate order) are
   // finished or skipped, then whenever it improves
+  // (reportAll, for the computer: from the first position solved on; it checks the
+  // network's choice first, see prioritize below)
   const shortlistTick = (g, improved) => {
+    g.done = true;
+    if (g.priority && !priorityDone) {
+      priorityDone = true;
+      improved = true;
+    }
     if (!useScreen && !reportAll || tied.length === 0) return;
-    if (!soFarSent) {
+    if (reportAll) {
+      if (soFarSent && !improved) return;
+      soFarSent = true;
+    } else if (!soFarSent) {
       if (g.oi >= R8_SHORTLIST || ++shortDone < R8_SHORTLIST) return;
       soFarSent = true;
     } else if (!improved) return;
@@ -2048,8 +2079,60 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
       ...S.describeValue(best3, 1e6)
     }, {
       checked: processed,
-      total: n
+      total: n,
+      priorityDone
     });
+  };
+  // prioritize(list, track): check the positions these bookings (placement lists, best
+  // first) lead to before the rest, in that order; a later call goes ahead of an earlier
+  // one. With track, the first booking of the list is the one whose coverage is reported
+  // (priorityDone): once it is done, every best so far is at least as good.
+  let priorityDone = false,
+    prioCalls = 0;
+  const groupOf = placements => {
+    // (the bank is bankList's unused digits, roll included, as in bookingGroups)
+    const rows = Int16Array.from(state.rows),
+      bk = new Int8Array(10);
+    let uA = state.usedA,
+      uB = state.usedB;
+    for (const b of bankList) if (!b.used) bk[b.digit]++;
+    for (const p of placements) {
+      const cat = p.cat !== undefined ? p.cat : S.CAT_NAMES.indexOf(p.category);
+      const c = S.dec(rows[cat * 5 + p.row]);
+      c[p.col] = p.digit;
+      rows[cat * 5 + p.row] = S.enc(c);
+      bk[p.digit]--;
+      if (p.bonus === 'A') uA = 1;
+      if (p.bonus === 'B') uB = 1;
+    }
+    const key = S.positionKey(S.makeState(rows, bk, uA, uB), 2, !!classicMode);
+    return groups.find(x => (x.pkey || (x.pkey = S.positionKey(x.state, 2, !!classicMode))) === key);
+  };
+  const prioRank = g => g.prio === undefined ? Infinity : g.prio;
+  const prioritize = (list, track) => {
+    const base = -1000 * ++prioCalls;
+    list.forEach((placements, i) => {
+      const g = groupOf(placements);
+      if (!g) return;
+      if (g.prio === undefined || base + i < g.prio) g.prio = base + i;
+      if (track && i === 0) {
+        g.priority = true;
+        if (g.done) {
+          priorityDone = true;
+          shortlistTick(g, true);
+        }
+      }
+    });
+    if (phase === 1) {
+      // reorder what is not handed out yet: prioritized first, the rest as they were
+      const rest = order.slice(nextIdx);
+      const pos = new Map(rest.map((g, i) => [g, i]));
+      rest.sort((a, b) => prioRank(a) - prioRank(b) || pos.get(a) - pos.get(b));
+      order = order.slice(0, nextIdx).concat(rest);
+      order.forEach((x, j) => {
+        x.oi = j;
+      });
+    }
   };
   const base = g => ({
     rows: Array.from(g.state.rows),
@@ -2191,6 +2274,10 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
       order = phase === 0 ? sortBy(groups.slice(), g => g.bound.ub) : sortBy(refineList.slice(), g => g.fine).concat(order.slice(refineList.length));
       phase = 1;
       nextIdx = 0;
+      {
+        const pos = new Map(order.map((g, i) => [g, i]));
+        order.sort((a, b) => prioRank(a) - prioRank(b) || pos.get(a) - pos.get(b));
+      }
       order.forEach((g, i) => {
         g.oi = i;
       });
@@ -2313,6 +2400,10 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
     ties = [];
     refineList = [];
     refined = 0;
+    priorityDone = false;
+    groups.forEach(g => {
+      g.done = false;
+    });
     runOnMainThread();
   };
   const nWorkers = Math.max(1, Math.min(opts && opts.maxWorkers || 8, (navigator.hardwareConcurrency || 2) - 1));
@@ -2348,6 +2439,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   } catch (err) {
     restartOnMainThread();
   }
+  cancel.prioritize = prioritize;
   return cancel;
 }
 function NextRoundPreview({
@@ -3688,6 +3780,8 @@ window.Simili = function Simili() {
   const [computerPlayer, setComputerPlayer] = useState(false);
   const cpuIdx = computerPlayer ? twoPlayer ? 1 : 0 : -1;
   const nameOf = i => i === cpuIdx ? 'Computer' : `Player ${i + 1}`;
+  // on the win screens: against the computer, the one human is just "Player"
+  const winnerName = i => i === cpuIdx ? 'Computer' : computerPlayer ? 'Player' : `Player ${i + 1}`;
   const [seedRolls, setSeedRolls] = useState(null);
   const [isSeededGame, setIsSeededGame] = useState(false);
   const allSeedsRef = useRef(null);
@@ -5299,9 +5393,9 @@ window.Simili = function Simili() {
       p2W = gameOverInfo[1]?.won;
     const p1S = gameOverInfo[0]?.score || 0,
       p2S = gameOverInfo[1]?.score || 0;
-    if (p1W && p2W) return p1S > p2S ? `Both Win — ${nameOf(0)} Wins More!` : p2S > p1S ? `Both Win — ${nameOf(1)} Wins More!` : 'Both Win — Tied!';
-    if (p1W) return `${nameOf(0)} Wins!`;
-    if (p2W) return `${nameOf(1)} Wins!`;
+    if (p1W && p2W) return p1S > p2S ? `Both Win — ${winnerName(0)} Wins More!` : p2S > p1S ? `Both Win — ${winnerName(1)} Wins More!` : 'Both Win — Tied!';
+    if (p1W) return `${winnerName(0)} Wins!`;
+    if (p2W) return `${winnerName(1)} Wins!`;
     if (gameOverInfo[0]?.unwinnable && gameOverInfo[1]?.unwinnable) return 'This game was impossible to win!';
     return 'Game Over — Neither Player Won';
   })()), /*#__PURE__*/React.createElement("div", {
@@ -5339,7 +5433,7 @@ window.Simili = function Simili() {
       fontWeight: 'bold',
       marginBottom: 8
     }
-  }, abandoned ? 'Game Abandoned' : gameOverInfo[0]?.won ? computerPlayer ? '🤖 THE COMPUTER WINS!' : '🎉 YOU WIN!' : gameOverInfo[0]?.unwinnable ? 'This game was impossible to win!' : 'Game Over'), /*#__PURE__*/React.createElement("div", {
+  }, abandoned ? 'Game Abandoned' : gameOverInfo[0]?.won ? computerPlayer ? 'Computer Wins!' : '🎉 YOU WIN!' : gameOverInfo[0]?.unwinnable ? 'This game was impossible to win!' : 'Game Over'), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 20,
       marginBottom: 4
@@ -5553,7 +5647,7 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 12
       }
-    }, nameOf(result.winner - 1), " Wins the Match!", result.tiebreak && /*#__PURE__*/React.createElement("div", {
+    }, winnerName(result.winner - 1), " Wins the Match!", result.tiebreak && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 13,
         fontWeight: 'normal',
@@ -6769,7 +6863,7 @@ window.Simili = function Simili() {
             pg: pct(p.seqBonusI, M)
           });
           rows.push({
-            label: isClassic || merged ? 'Sequence Bonus II Unlocks' : 'Sequence Bonus II-A Unlocks',
+            label: isClassic ? 'Sequence Bonus II Unlocks' : 'Sequence Bonus II-A Unlocks',
             total: p.seqBonusIIA,
             pg: pct(p.seqBonusIIA, M)
           });

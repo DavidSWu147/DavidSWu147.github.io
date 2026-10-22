@@ -79,6 +79,69 @@
     return n;
   }
 
+  // ---------- canonical form ----------
+  // The game looks the same after renaming every digit d to s*d + t (mod 10), s = +-1
+  // (shifts, and reflections about any axis): runs, pairs and ladders wrap around (9012,
+  // 0099) and the dice are uniform. So all (up to) 20 renamings of a position have the
+  // same value, and the network only ever sees one of them, the canonical one: the
+  // renaming with the smallest bank (as the counts of 0, 1, ..., 9), then the smallest
+  // rows (each category's row classes, sorted). The network is then exactly symmetric,
+  // and an equal choice between equivalent plays stays a true tie.
+  const NG = 20;
+  const DMAP = [], RMAP = [];          // per renaming g: digit map, row-code map
+  for (let g = 0; g < NG; g++) {
+    const sg = g < 10 ? 1 : -1, t = g % 10;
+    const dm = new Int8Array(10);
+    for (let d = 0; d < 10; d++) dm[d] = (((sg * d + t) % 10) + 10) % 10;
+    DMAP.push(dm);
+    const n = CLASS[0].length, rm = new Int16Array(n);
+    for (let code = 0; code < n; code++) rm[code] = S.enc(S.dec(code).map(x => (x === S.E ? S.E : dm[x])));
+    RMAP.push(rm);
+  }
+  const cbBank = new Int8Array(10), cbRows = new Int16Array(15);
+  const keyRows = new Int16Array(15), bestRows = new Int16Array(15);
+  // sorted class indices of each category's rows (the network cannot tell row order)
+  function rowKey(rows, out) {
+    for (let cat = 0; cat < 3; cat++) {
+      const m = CLS[cat].map, b = cat * ROWS;
+      for (let i = 0; i < ROWS; i++) {
+        const v = m[rows[b + i]];
+        let j = i;
+        while (j > 0 && out[b + j - 1] > v) { out[b + j] = out[b + j - 1]; j--; }
+        out[b + j] = v;
+      }
+    }
+  }
+  // The canonical renaming of (rows, bank): returns g; the renamed rows and bank are
+  // left in canon.rows / canon.bank (reused buffers).
+  const canon = { rows: new Int16Array(15), bank: new Int8Array(10) };
+  // a given renaming g, into the same buffers
+  function renameInto(rows, bank, g) {
+    const dm = DMAP[g], rm = RMAP[g];
+    for (let d = 0; d < 10; d++) canon.bank[dm[d]] = bank[d];
+    for (let i = 0; i < 15; i++) canon.rows[i] = rm[rows[i]];
+  }
+  function canonicalize(rows, bank) {
+    let best = -1;
+    for (let g = 0; g < NG; g++) {
+      const dm = DMAP[g];
+      for (let d = 0; d < 10; d++) cbBank[dm[d]] = bank[d];
+      let c = 0;
+      if (best >= 0) for (let d = 0; d < 10 && c === 0; d++) c = cbBank[d] - canon.bank[d];
+      if (c > 0) continue;
+      const rm = RMAP[g];
+      for (let i = 0; i < 15; i++) cbRows[i] = rm[rows[i]];
+      rowKey(cbRows, keyRows);
+      if (best >= 0 && c === 0) {
+        for (let i = 0; i < 15 && c === 0; i++) c = keyRows[i] - bestRows[i];
+        if (c >= 0) continue;
+      }
+      best = g;
+      canon.bank.set(cbBank); canon.rows.set(cbRows); bestRows.set(keyRows);
+    }
+    return best;
+  }
+
   // ---------- network ----------
   // One hidden layer (ReLU), three sigmoid outputs. Weights: w1[feature * H + j], b1[j],
   // w2[o * H + j], b2[o]. The first layer only touches the active features.
@@ -133,6 +196,9 @@
   // and a sure Quad like 0.2%.
   const LS = 0.02, LQ = 0.002;
   const utility = v => v[0] + LS * v[1] + LQ * v[2];
+  // Estimates of equivalent positions can differ in the last bits (sums in a different
+  // order); closer than this they count as equal and the usual tie-breaks decide.
+  const TIE = 1e-7;
 
   // ---------- player ----------
   // model: { nets: { 2: spec, 3: spec, ... } } (k = rounds left at the start of a round)
@@ -148,6 +214,9 @@
       this.nets[k] = (Array.isArray(spec) ? spec : [spec]).map(x => new Net(x));
     }
     this.o2 = new Float64Array(3);
+    this.frame = null;
+    // canonical: false - no renaming at all (as before; for comparisons)
+    this.fixedFrame = opts.canonical === false ? 0 : null;
     this.idx = new Int32Array(MAXACTIVE); this.val = new Float32Array(MAXACTIVE);
     this.out = new Float64Array(3);
     this.evals = 0;
@@ -172,31 +241,56 @@
     const nets = this.nets[k];
     if (!nets) throw new Error('no network for ' + k + ' rounds left');
     this.evals++;
-    const n = features(rows, bank, usedA, usedB, this.classic, this.idx, this.val, base ? base.cat : -1);
-    const a = nets[0].eval(this.idx, this.val, n, this.out, base && base.h[0]);
+    // within one decision (this.frame set), every option is renamed the same way: the
+    // canonical renaming of the decision's position (see bestAfterRoll); otherwise each
+    // position its own canonical renaming
+    let g;
+    if (this.fixedFrame !== null) { g = this.fixedFrame; renameInto(rows, bank, g); }
+    else if (this.frame !== null) { g = this.frame; renameInto(rows, bank, g); } else g = canonicalize(rows, bank);
+    const h0 = base ? this.baseH(base, g) : null;
+    const n = features(canon.rows, canon.bank, usedA, usedB, this.classic, this.idx, this.val, base ? base.cat : -1);
+    const a = nets[0].eval(this.idx, this.val, n, this.out, h0 && h0[0]);
     const va = [a[0], a[1], a[2]];
     if (nets.length < 2) return [va, va];
-    const b = nets[1].eval(this.idx, this.val, n, this.o2, base && base.h[1]);
+    const b = nets[1].eval(this.idx, this.val, n, this.o2, h0 && h0[1]);
     return [va, [b[0], b[1], b[2]]];
   };
   // Bookings in one category leave the other two untouched (except free books): their
   // rows' part of the first layer is worked out once.
+  // (Under each renaming g those rows look different, so one sum per renaming used.)
   Player.prototype.baseFor = function (rows, cat, k) {
     const nets = this.nets[k];
     if (!nets) return null;
-    const idx = [], val = [];
-    for (let c = 0; c < 3; c++) {
-      if (c === cat) continue;
-      for (let i = 0; i < ROWS; i++) { idx.push(OFF[c] + CLS[c].map[rows[c * ROWS + i]]); val.push(1); }
+    return { cat, rows: Int16Array.from(rows), nets, h: new Array(NG).fill(null) };
+  };
+  Player.prototype.baseH = function (base, g) {
+    if (!base.h[g]) {
+      const idx = [], val = [], rm = RMAP[g];
+      for (let c = 0; c < 3; c++) {
+        if (c === base.cat) continue;
+        for (let i = 0; i < ROWS; i++) { idx.push(OFF[c] + CLS[c].map[rm[base.rows[c * ROWS + i]]]); val.push(1); }
+      }
+      base.h[g] = base.nets.map(net => net.partial(idx, val, idx.length));
     }
-    return { cat, uA: null, h: nets.map(net => net.partial(idx, val, idx.length)) };
+    return base.h[g];
   };
   // Best booking value after the roll (bank includes it), k rounds left counting this one.
   // double: for training labels. Picking the best of many noisy estimates and taking
   // its estimate overrates it (the pick is likely one the network overrates), and
   // that would grow round after round. So the booking is picked with one network and
   // valued with the other, and the other way round, and the two are averaged.
+  // All bookings of one decision are judged in one renaming: the canonical renaming of the
+  // position with the roll in the bank. The decision is then the same for every
+  // renaming of the situation, and the network's small digit-specific errors are the
+  // same for all the options compared (renaming each option on its own made them differ
+  // from option to option, and the computer played worse: 72.5% instead of 78.3% of 240
+  // test games).
   Player.prototype.bestAfterRoll = function (st, cat, bank, k, double) {
+    const saved = this.frame;
+    this.frame = canonicalize(st.rows, bank);
+    try { return this.bestAfterRollIn(st, cat, bank, k, double); } finally { this.frame = saved; }
+  };
+  Player.prototype.bestAfterRollIn = function (st, cat, bank, k, double) {
     const base = k - 1 >= 2 ? this.baseFor(st.rows, cat, k - 1) : null;
     // a free book may change another category: then no shortcut
     const baseOf = (uA, uB) => (uA === st.usedA && uB === st.usedB ? base : null);
@@ -255,7 +349,7 @@
     }
     const values = this.categoryValues(st, k, rolls);
     let b = 0;
-    for (let c = 1; c < 3; c++) if (utility(values[c]) > utility(values[b])) b = c;
+    for (let c = 1; c < 3; c++) if (utility(values[c]) > utility(values[b]) + TIE) b = c;   // ties: S, M, L
     return { cat: b, values, exact: false };
   };
   // Booking after the roll: { placements (as bestBooking), value }. bankList includes the roll.
@@ -268,29 +362,48 @@
     if (k <= 2) return this.solver.bestBooking(st, cat, bankList, k);
     const bank = new Int8Array(10);
     for (const b of bankList) if (!b.used) bank[b.digit]++;
+    this.frame = canonicalize(st.rows, bank);     // one renaming for all options (see bestAfterRoll)
     const top = recheck && recheck.top > 1 ? recheck.top : 1;
     const list = [];       // best `top` by estimate, best first
     this.solver.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
       const v = this.value(rows, bk, uA, uB, k - 1), u = utility(v);
-      if (list.length === top && u < list[top - 1].u) return;
+      if (list.length === top && u < list[top - 1].u - TIE) return;
       const cand = S.candidateOf(rows, placements, bankList, this.classic);
       // equal estimates (equivalent positions): the solver's booking tie-breaks
-      const same = list.findIndex(x => x.u === u);
+      const same = list.findIndex(x => Math.abs(x.u - u) <= TIE);
       if (same >= 0) { if (S.tieBreakBetter(cand, list[same].cand)) list[same] = { u, v, cand, rows: Int16Array.from(rows), bk: Int8Array.from(bk), uA, uB }; return; }
       list.push({ u, v, cand, rows: Int16Array.from(rows), bk: Int8Array.from(bk), uA, uB });
       list.sort((a, b) => b.u - a.u);
       if (list.length > top) list.pop();
     });
+    this.frame = null;
     let best = list[0];
     if (top > 1 && list.length > 1) {
       let bu = -Infinity;
       for (const x of list) {
         const v = this.positionValue(S.makeState(x.rows, x.bk, x.uA, x.uB), k - 1, recheck.rolls);
         const u = utility(v);
-        if (u > bu) { bu = u; best = { ...x, v }; }
+        if (u > bu + TIE) { bu = u; best = { ...x, v }; }
       }
     }
     return { placements: best.cand.placements.map(p => ({ ...p, category: S.CAT_NAMES[p.cat] })), value: best.v };
+  };
+
+  // The `top` bookings by the network's estimate alone, best first, as placement lists
+  // (equivalent positions once). Cheap: used to order the exact Round 8 search, so that
+  // the likeliest plays are checked first.
+  Player.prototype.rankBookings = function (st, cat, bankList, k, top) {
+    const bank = new Int8Array(10);
+    for (const b of bankList) if (!b.used) bank[b.digit]++;
+    this.frame = canonicalize(st.rows, bank);
+    const seen = new Map();
+    this.solver.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
+      const key = this.solver.key(rows, bk, uA, uB, k - 1);
+      if (seen.has(key)) return;
+      seen.set(key, { u: utility(this.value(rows, bk, uA, uB, k - 1)), placements: placements.map(p => ({ ...p })) });
+    });
+    this.frame = null;
+    return [...seen.values()].sort((a, b) => b.u - a.u).slice(0, top).map(x => x.placements);
   };
 
   // The game looks the same after renaming every digit d to s*d + t (mod 10), s = +-1:
@@ -313,5 +426,11 @@
     return { rows: p.rows.map(code => renameRow(code, sg, t)), bank, uA: p.uA, uB: p.uB, classic: p.classic };
   }
 
-  return { renamePosition, features, NFEAT, MAXACTIVE, Net, Player, utility, encode, decode, LS, LQ, CLS };
+  // features of a position's canonical form (training)
+  function canonicalFeatures(p, idx, val) {
+    canonicalize(p.rows, p.bank);
+    return features(canon.rows, canon.bank, p.uA, p.uB, p.classic, idx, val);
+  }
+
+  return { TIE, canonicalize, canonicalFeatures, renamePosition, features, NFEAT, MAXACTIVE, Net, Player, utility, encode, decode, LS, LQ, CLS };
 });
