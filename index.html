@@ -2144,7 +2144,10 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   // with the estimates, estimating everything is a large share of the time to the first answer
   const p0 = useScreen ? 0.25 : 0.1,
     p1 = useScreen ? 0.3 : 0.1;
-  const report = () => onProgress(phase === 0 ? p0 * boundsDone / n : phase === 0.5 ? p0 + (p1 - p0) * refined / refineList.length : phase === 1 ? p1 + (0.9 - p1) * processed / n : phase === 2 ? 0.9 + 0.08 * (tied.length ? tiedDone / tied.length : 1) : 0.98 + 0.02 * (ties.length ? altDone / ties.length : 1));
+  const report = () => onProgress(phase === 0 ? p0 * boundsDone / n : phase === 0.5 ? p0 + (p1 - p0) * refined / refineList.length : phase === 1 ? p1 + (0.9 - p1) * processed / n : phase === 2 ? 0.9 + 0.08 * (tied.length ? tiedDone / tied.length : 1) : 0.98 + 0.02 * (ties.length ? altDone / ties.length : 1), {
+    checked: processed,
+    total: n
+  });
   // the next piece of work, or null if the current phase has nothing left to hand out
   const nextTask = () => {
     if (phase === 0) {
@@ -2738,7 +2741,7 @@ function PlayerSheet({
       marginBottom: 6,
       textAlign: 'center'
     }
-  }, cpuShown ? "Computer's choice:" : ps.chosenCategory ? 'Category chosen ✓ (click Reveal to show)' : computer.status || 'Choosing a category…'), /*#__PURE__*/React.createElement("div", {
+  }, cpuShown ? "Computer's choice:" : ps.chosenCategory ? 'Category chosen ✓ (clicking Reveal locks own category)' : computer.status || 'Choosing a category…'), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
@@ -3200,7 +3203,12 @@ function PlayerSheet({
         fontSize: 11,
         color: '#8b6914'
       }
-    }, `${pct}% · ${secs}s`)), ready && /*#__PURE__*/React.createElement("span", {
+    }, `${pct}% · ${secs}s`)), r8Job && r8Job.final && r8Job.ended && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#8b6914'
+      }
+    }, `${Math.round((r8Job.ended - r8Job.started) / 1000)}s`), ready && /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 11,
         color: '#8b6914'
@@ -3210,7 +3218,7 @@ function PlayerSheet({
         fontSize: 11,
         color: '#8b6914'
       }
-    }, ps.hint.note));
+    }, ps.hint.soFar && job && job.key === ps.hint.r8 && job.total ? `Best so far · ${(job.checked || 0).toLocaleString('en-US')} of ${job.total.toLocaleString('en-US')} plays checked` : ps.hint.note));
   })(), (!computer || computer.booked || phase !== 'book') && /*#__PURE__*/React.createElement("button", {
     onClick: () => onEndRound(playerIdx),
     style: {
@@ -4324,7 +4332,8 @@ window.Simili = function Simili() {
             ...x,
             hint: {
               ...x.hint,
-              note: best.note
+              note: best.note,
+              soFar: !!best.soFar
             }
           } : x);
         } else if (untouched) {
@@ -4335,25 +4344,32 @@ window.Simili = function Simili() {
           progress: final ? 1 : j.progress,
           result: best,
           final,
-          stale: !untouched
+          stale: !untouched,
+          ended: final ? j.ended || Date.now() : j.ended
         } : j);
       };
-      r8CancelRef.current[playerIdx] = startRound8Job(state, cat, bankList, classicMode, pr => setR8Job(playerIdx, j => j && j.key === key ? {
+      r8CancelRef.current[playerIdx] = startRound8Job(state, cat, bankList, classicMode, (pr, info) => setR8Job(playerIdx, j => j && j.key === key ? {
         ...j,
-        progress: pr
+        progress: pr,
+        checked: info ? info.checked : j.checked,
+        total: info ? info.total : j.total
       } : j), (best, info) => {
         // the likeliest plays are all checked: book the best so far, keep checking the rest
         const n = info.total.toLocaleString('en-US');
+        // (soFar: the sheet keeps the count of plays checked up to date while the search goes on)
         deliver({
           ...best,
-          note: `Best so far · ${info.checked} of ${n} plays checked`,
-          r8: key
+          note: `Best so far · ${info.checked.toLocaleString('en-US')} of ${n} plays checked`,
+          r8: key,
+          soFar: true
         }, false);
       }, best => {
         r8CancelRef.current[playerIdx] = null;
         const prev = (r8JobsRef.current[playerIdx] || {}).result;
         // after a best-so-far, say the search is complete; otherwise as in rounds 9 and 10
-        const note = prev && !samePlay(prev, best) ? 'Better play found · all plays checked' : best.placements.length === 0 ? 'Best play: book nothing' : prev ? 'Best play · all plays checked' : '';
+        const tot = (r8JobsRef.current[playerIdx] || {}).total;
+        const all = tot ? `all ${tot.toLocaleString('en-US')} plays checked` : 'all plays checked';
+        const note = prev && !samePlay(prev, best) ? `Better play found · ${all}` : best.placements.length === 0 ? 'Best play: book nothing' : prev ? `Best play · ${all}` : '';
         deliver({
           ...best,
           note,
@@ -4381,7 +4397,8 @@ window.Simili = function Simili() {
       hint: {
         note,
         cells,
-        r8: best.r8 || null
+        r8: best.r8 || null,
+        soFar: !!best.soFar
       }
     };
   };
@@ -6248,7 +6265,9 @@ window.Simili = function Simili() {
           opacity: 0.6
         }
       }, ' ', "(", [log.settings.quadBonus ? 'Quad Bonus On' : 'Quad Bonus Off', log.settings.classicMode ? 'Classic' : 'Modern', log.settings.laxPlacement ? 'Lax Pl.' : 'Strict Pl.', ...(log.settings.hintsOn ? ['Hints On'] : [])].join(', '), ")"), log.abandoned ? ' (Abandoned)' : '', " \u2014 ", log.players.map((p, pi) => {
-        const label = log.settings.twoPlayer ? `P${pi + 1}: ` : '';
+        // CPU: the computer's sheet (Player 2 against you, or the only player)
+        const isCpu = log.settings.computerPlayer && pi === (log.settings.twoPlayer ? 1 : 0);
+        const label = isCpu ? 'CPU: ' : `P${pi + 1}: `;
         return `${label}${p.score} pts${p.won ? ' ✓' : ' ✗'}`;
       }).join(' · ')), /*#__PURE__*/React.createElement("div", {
         style: {
@@ -6326,7 +6345,7 @@ window.Simili = function Simili() {
           fontSize: 10,
           opacity: 0.5
         }
-      }, "P2")) : /*#__PURE__*/React.createElement("th", {
+      }, log.settings.computerPlayer ? 'CPU' : 'P2')) : /*#__PURE__*/React.createElement("th", {
         style: {
           textAlign: 'left',
           padding: '2px 4px',
@@ -6354,7 +6373,7 @@ window.Simili = function Simili() {
           fontSize: 10,
           opacity: 0.5
         }
-      }, "P2 Booked")) : /*#__PURE__*/React.createElement("th", {
+      }, log.settings.computerPlayer ? 'CPU Booked' : 'P2 Booked')) : /*#__PURE__*/React.createElement("th", {
         style: {
           textAlign: 'left',
           padding: '2px 4px',
