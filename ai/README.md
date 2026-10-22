@@ -415,10 +415,23 @@ out to matter:
   other way round). Taking the best of many estimates and its own estimate overrates
   it, and that grew round after round: the first try thought the start of round 2 was a
   98% win.
-- *The game is symmetric under renaming digits* d -> s*d + t (mod 10), s = +-1: runs,
-  pairs and ladders wrap around (9012, 0099) and the dice are uniform (checked for every
-  legal row). So each labelled position gives 20 training examples. On round-9 starts
-  this took the error from 11 to 8.7 points of win chance with 1,500 positions.
+- *The game is symmetric under renaming digits* d -> s*d + t (mod 10), s = +-1, i.e.
+  shifting the digits round the cycle and reflecting about any axis: runs, pairs and
+  ladders wrap around (9012, 0099) and the dice are uniform (checked for every legal
+  row). So the up to 20 renamings of a position have the same value, and:
+  - in play the network only ever sees the *canonical* renaming (the one with the
+    smallest bank, as the counts of 0, 1, ..., 9, then the smallest rows). Its estimates
+    are then exactly the same for all 20 (`ai/test/verify-canonical.js`), and choices
+    between equivalent plays are true ties, decided by the usual tie-breaks. Before
+    this, the first small model booked a pair of 8s in Round 1 (but no other pair) and
+    preferred Matching in Round 1 by 0.00000001, both just network noise; now it books
+    nothing after any Round 1 roll and the three categories tie (Sequence first, as in
+    the solver's order);
+  - in training it still learns from all 20 renamings of each labelled position (20
+    examples each). On round-9 starts with 1,500 positions that took the error from 11
+    to 8.7 points of win chance; tested on canonical inputs it is 7.8 points with 5,100
+    positions, against 8.4 when trained on canonical inputs only (the canonical choice
+    jumps around between similar positions, which makes the inputs harder to learn).
   (Extra inputs did not help: the exact one-round-left value, a two-round relaxation,
   which bank digits extend which rows.)
 - *Who plays the games.* Pass 1 uses a greedy player (most points now, in the category
@@ -486,6 +499,7 @@ node ai/test/verify-loose.js [n]      # display mode: first three values == exac
 node ai/test/verify-r8.js [n] [seed]  # round-8 branch and bound == exhaustive search (very slow)
 node ai/test/verify-tiebreak.js [n]   # round-9 Hint: second/worst-category tie-break == brute force
 node ai/test/verify-save-free.js [n]  # free books saved for round 10: same round-9 values
+node ai/test/verify-canonical.js      # computer player: same estimate for all 20 digit renamings
 node ai/test/bench.js <round> <count> [start|book]
 ```
 

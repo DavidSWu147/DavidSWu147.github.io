@@ -2,7 +2,7 @@
 // Trains the networks of ai/simili-ai.js and writes ai/model.json.
 //
 //   node ai/train/train.js [--games 40000] [--labels 40000] [--rolls 12] [--iterations 3]
-//                          [--hidden 64] [--epochs 15] [--augment 1] [--workers <cores>] [--out ai/model.json]
+//                          [--hidden 64] [--epochs 15] [--workers <cores>] [--out ai/model.json]
 //
 // Backwards, round by round: positions at the start of rounds 2-9 come from self-play
 // games; N[2] (start of round 9) learns values worked out by the exact solver, N[3]
@@ -21,7 +21,7 @@ const { train, mulberry, shuffle } = require('./mlp.js');
 
 const args = (() => {
   const a = {
-    games: 40000, labels: 40000, rolls: 12, iterations: 3, hidden: 64, epochs: 15, augment: 1,
+    games: 40000, labels: 40000, rolls: 12, iterations: 3, hidden: 64, epochs: 15,
     workers: Math.max(1, os.cpus().length), out: path.join(__dirname, '..', 'model.json'),
     classic: 0.25, seed: 1, check: 300, verbose: 0, stopAfter: 0,
   };
@@ -167,13 +167,18 @@ async function main() {
         fs.writeFileSync(labFile, JSON.stringify({ positions: pick, ys }));
       }
       // features + training
-      // each position also under the 20 digit renamings (same value; see simili-ai.js)
-      const feat = (p, y) => {
+      // In play the network sees each position's canonical renaming (simili-ai.js), so its
+      // estimates are exactly the same for all 20 renamings. It still learns from all 20
+      // renamings of each labelled position: on round-9 starts that gave 7.8 points of
+      // error on canonical inputs, against 8.4 when trained on canonical inputs only (the
+      // canonical choice jumps around between similar positions, which is harder to learn).
+      const featOf = (p, y, canonical) => {
         const idx = new Int32Array(AI.MAXACTIVE), val = new Float32Array(AI.MAXACTIVE);
-        const n = AI.features(p.rows, p.bank, p.uA, p.uB, p.classic, idx, val);
+        const n = canonical ? AI.canonicalFeatures(p, idx, val) : AI.features(p.rows, p.bank, p.uA, p.uB, p.classic, idx, val);
         return { idx, val, n, y };
       };
-      const expand = list => (args.augment ? list.flatMap(s => [1, -1].flatMap(sg => Array.from({ length: 10 }, (_, t) => feat(AI.renamePosition(s.p, sg, t), s.y)))) : list.map(s => feat(s.p, s.y)));
+      const feat = (p, y) => featOf(p, y, true);
+      const expand = list => list.flatMap(s => [1, -1].flatMap(sg => Array.from({ length: 10 }, (_, t) => featOf(AI.renamePosition(s.p, sg, t), s.y, false))));
       const samples = pick.map((p, i) => ({ p, y: ys[i] }));
       const meanWin = samples.reduce((a, s) => a + s.y[0], 0) / samples.length;
       const testRand = mulberry(args.seed * 31 + k);

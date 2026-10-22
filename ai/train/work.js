@@ -18,7 +18,7 @@ let uses = 0;
 function players(model, modelId) {
   let p = cache.get(modelId);
   if (!p || model) {
-    p = [false, true].map(classic => new AI.Player({ classic, model: model || { nets: {} }, solver: new S.Solver({ classic, ...SOLVER_OPTS }) }));
+    p = [false, true].map(classic => new AI.Player({ classic, model: model || { nets: {} }, solver: new S.Solver({ classic, ...SOLVER_OPTS }), canonical: process.env.SIMILI_CANONICAL !== '0' }));
     cache.set(modelId, p);
     if (cache.size > 3) cache.delete(cache.keys().next().value);
   }

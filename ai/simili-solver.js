@@ -12,7 +12,7 @@
 //   4. average final score when losing (sum over losing outcomes)
 // Booking tie-breaks (top-level only): 5. most points at the end of this round,
 // 6. fewest digits, 7. avoid the most recently banked digits,
-// 8. lean left (same digits placed further left / higher up), 9. ascending Sequences.
+// 8. lean left (same digits placed further left / higher up), 9. ascending Sequences and Ladders.
 // ============================================================
 (function (root) {
   'use strict';
@@ -1655,6 +1655,13 @@
     for (let i = 0; i < 4; i++) if (c[i] !== E) f.push((c[i] - i + 10) % 10);
     return f.length > 0 && f.every(x => x === f[0]);
   }
+  // a Ladder row XXYY going up: Y = X + 1 (mod 10, so 9900 is ascending and 0099 is not);
+  // both halves need a digit
+  function isAscendingLadder(code) {
+    const c = dec(code);
+    const x = c[0] !== E ? c[0] : c[1], y = c[2] !== E ? c[2] : c[3];
+    return x !== E && y !== E && y === (x + 1) % 10;
+  }
   // tie-break data for one booking (placements as built by forEachBooking with `track`)
   function candidateOf(rows, placements, bankList, classic) {
     const n = placements.length;
@@ -1662,6 +1669,7 @@
     const cellOrder = placements.map(p => p.cat * 100 + p.row * 10 + p.col).sort((x, y) => x - y);
     let ascending = 0;
     for (const r of new Set(placements.filter(p => p.cat === SEQ).map(p => p.row))) if (isAscendingRow(rows[r])) ascending++;
+    for (const r of new Set(placements.filter(p => p.cat === LAD).map(p => p.row))) if (isAscendingLadder(rows[LAD * 5 + r])) ascending++;
     const nB = placements.filter(p => p.bonus === 'B').length, nA = placements.filter(p => p.bonus === 'A').length;
     return { v: null, now: terminalScore(rows, classic), alt: null, n, idxs, nB, nA, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
   }
@@ -1689,7 +1697,7 @@
     // lean left (cells compared in reading order: category, row, column)
     const u = a.cellOrder, w = b.cellOrder;
     for (let i = 0; i < u.length; i++) if (u[i] !== w[i]) return u[i] < w[i];
-    // still tied (e.g. 890_ vs 098_): prefer Sequences written ascending
+    // still tied (e.g. 890_ vs 098_, 3344 vs 4433): prefer Sequences and Ladders written ascending
     return a.ascending > b.ascending;
   }
   // earliest unused copy of each digit (equal digits: keep the newest ones in the bank)

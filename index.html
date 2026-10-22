@@ -2738,7 +2738,7 @@ function PlayerSheet({
       marginBottom: 6,
       textAlign: 'center'
     }
-  }, cpuShown ? "Computer's category choice:" : ps.chosenCategory ? 'Category chosen ✓ (click Reveal to show)' : computer.status || 'Choosing a category…'), /*#__PURE__*/React.createElement("div", {
+  }, cpuShown ? "Computer's choice:" : ps.chosenCategory ? 'Category chosen ✓ (click Reveal to show)' : computer.status || 'Choosing a category…'), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 8,
@@ -2788,7 +2788,7 @@ function PlayerSheet({
       marginTop: 4,
       opacity: 0.6
     }
-  }, ps.chosenCategory && (!computer || cpuShown) ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected${categoryLocked && phase === 'choose' ? ' · locked' : ''}` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 2 && hintsOn && ps.chosenCategory && (!computer || cpuShown) && typeof SimiliSolver !== 'undefined' && (() => {
+  }, ps.chosenCategory && (!computer || cpuShown) ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 2 && hintsOn && ps.chosenCategory && (!computer || cpuShown) && typeof SimiliSolver !== 'undefined' && (() => {
     const c = round9Odds && round9Odds.result ? round9Odds.result.categories.find(x => x.category === ps.chosenCategory) : null;
     if (!c) {
       const pct = round9Odds ? Math.round((round9Odds.progress || 0) * 100) : 0;
@@ -3224,7 +3224,13 @@ function PlayerSheet({
       cursor: 'pointer',
       marginLeft: 'auto'
     }
-  }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round'))), phase === 'book' && !ps.bonusBookPhase && (round === TOTAL_ROUNDS - 3 || round === TOTAL_ROUNDS - 2) && hintsOn && typeof SimiliSolver !== 'undefined' && !computer && /*#__PURE__*/React.createElement(NextRoundPreview, {
+  }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round')))), phase === 'book' && !ps.bonusBookPhase && (round === TOTAL_ROUNDS - 3 || round === TOTAL_ROUNDS - 2) && hintsOn && typeof SimiliSolver !== 'undefined' && !computer && /*#__PURE__*/React.createElement("div", {
+    style: ps.roundDone ? {
+      borderTop: '1px dashed #ccc',
+      paddingTop: 8,
+      marginTop: 6
+    } : undefined
+  }, /*#__PURE__*/React.createElement(NextRoundPreview, {
     ps: ps,
     bank: bank,
     round: round,
@@ -4429,13 +4435,15 @@ window.Simili = function Simili() {
     if (prevPlayersDoneRef.current) return; // already processed
     prevPlayersDoneRef.current = true;
     if (round >= TOTAL_ROUNDS - 1) {
-      const anyHasBonus = players.some(p => {
+      // (the computer's Round 10 booking already includes any free books worth using, so it skips this)
+      const anyHasBonus = players.some((p, i) => {
+        if (i === cpuIdx) return false;
         return p.seqBonusIIAUnlocked && !p.seqBonusIIAUsed || p.seqBonusIIBUnlocked && !p.seqBonusIIBUsed;
       });
       if (anyHasBonus) {
         setPhase('endgame-bonus');
-        setPlayers(prev => prev.map(p => {
-          const hasUnused = p.seqBonusIIAUnlocked && !p.seqBonusIIAUsed || p.seqBonusIIBUnlocked && !p.seqBonusIIBUsed;
+        setPlayers(prev => prev.map((p, i) => {
+          const hasUnused = i !== cpuIdx && (p.seqBonusIIAUnlocked && !p.seqBonusIIAUsed || p.seqBonusIIBUnlocked && !p.seqBonusIIBUsed);
           return {
             ...p,
             roundDone: !hasUnused,
@@ -5978,8 +5986,8 @@ window.Simili = function Simili() {
       setStatsPageIndex(i => v ? i < 8 ? 2 * i : i + 8 : i < 16 ? Math.floor(i / 2) : i - 8);
       setSplitVersionStats(v);
     },
-    leftLabel: "Merge Version Stats",
-    rightLabel: "Split Version Stats"
+    leftLabel: "Merge Ver. Stats",
+    rightLabel: "Split Ver. Stats"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,

@@ -389,23 +389,6 @@
     return { placements: best.cand.placements.map(p => ({ ...p, category: S.CAT_NAMES[p.cat] })), value: best.v };
   };
 
-  // The `top` bookings by the network's estimate alone, best first, as placement lists
-  // (equivalent positions once). Cheap: used to order the exact Round 8 search, so that
-  // the likeliest plays are checked first.
-  Player.prototype.rankBookings = function (st, cat, bankList, k, top) {
-    const bank = new Int8Array(10);
-    for (const b of bankList) if (!b.used) bank[b.digit]++;
-    this.frame = canonicalize(st.rows, bank);
-    const seen = new Map();
-    this.solver.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
-      const key = this.solver.key(rows, bk, uA, uB, k - 1);
-      if (seen.has(key)) return;
-      seen.set(key, { u: utility(this.value(rows, bk, uA, uB, k - 1)), placements: placements.map(p => ({ ...p })) });
-    });
-    this.frame = null;
-    return [...seen.values()].sort((a, b) => b.u - a.u).slice(0, top).map(x => x.placements);
-  };
-
   // The game looks the same after renaming every digit d to s*d + t (mod 10), s = +-1:
   // runs, pairs and ladders wrap around (9012, 0099), and the dice are uniform. So a
   // position's value is the same for all 20 renamings, which gives 20 training examples
