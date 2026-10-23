@@ -376,9 +376,24 @@
   };
   Player.prototype.chooseBooking = function (st, cat, bankList, k, recheck) {
     if (k <= 2) return this.solver.bestBooking(st, cat, bankList, k);
+    const top = recheck && recheck.top > 1 ? recheck.top : 1;
+    const sl = this.bookingShortlist(st, cat, bankList, k, top);
+    if (sl.best) return this.bookingResult(sl.best);
+    const rolls = recheck.rolls === 'all' ? undefined : recheck.rolls;
+    return this.bookingResult(this.pickBooking(sl.list.map(x => {
+      const v = this.recheckValue(x, k, rolls);
+      return { ...x, v, u: utility(v) };
+    }), k));
+  };
+  // The steps of chooseBooking (k >= 3), separate so the page can re-check the shortlist's
+  // bookings in parallel, one per worker, with the same result:
+  // 1. bookingShortlist: every position the booking can lead to, judged by the network.
+  //    { best } when there is nothing to re-check (top <= 1 or a single option); else
+  //    { list }: the `top` best estimates, and the margin's choice among the near-best if it
+  //    is not one of them. Each item: { u, v, cand, rows, bk, uA, uB }.
+  Player.prototype.bookingShortlist = function (st, cat, bankList, k, top) {
     const bank = new Int8Array(10);
     for (const b of bankList) if (!b.used) bank[b.digit]++;
-    const margin = Math.max(TIE, this.tieMargin(k));
     this.frame = canonicalize(st.rows, bank);     // one renaming for all options (see bestAfterRoll)
     // every position the booking can lead to, once (equivalent bookings: the tie-breaks' choice)
     const byKey = new Map();
@@ -392,31 +407,31 @@
     });
     this.frame = null;
     const all = [...byKey.values()].sort((a, b) => b.u - a.u);
-    // among those within `margin` of the best: the fewest digits booked, then the best
-    // estimate (equal estimates: the booking tie-breaks)
-    const pick = list => {
-      let bu = -Infinity;
-      for (const x of list) if (x.u > bu) bu = x.u;
-      let b = null;
-      for (const x of list) {
-        if (x.u < bu - margin) continue;
-        if (b === null || x.cand.n < b.cand.n || (x.cand.n === b.cand.n && (x.u > b.u + TIE || (Math.abs(x.u - b.u) <= TIE && S.tieBreakBetter(x.cand, b.cand))))) b = x;
-      }
-      return b;
-    };
-    const top = recheck && recheck.top > 1 ? recheck.top : 1;
-    let best;
-    if (top > 1 && all.length > 1) {
-      // the `top` best estimates, and the margin's choice among the near-best if it is not one of them
-      const list = all.slice(0, top);
-      const tb = pick(all);
-      if (!list.includes(tb)) list.push(tb);
-      const rolls = recheck.rolls === 'all' ? undefined : recheck.rolls;
-      best = pick(list.map(x => {
-        const v = this.positionValue(S.makeState(x.rows, x.bk, x.uA, x.uB), k - 1, rolls);
-        return { ...x, v, u: utility(v) };
-      }));
-    } else best = pick(all);
+    if (top <= 1 || all.length <= 1) return { best: this.pickBooking(all, k) };
+    const list = all.slice(0, top);
+    const tb = this.pickBooking(all, k);
+    if (!list.includes(tb)) list.push(tb);
+    return { list };
+  };
+  // 2. the re-check of one item: the value of its position looking one round further, over
+  //    `rolls` (undefined: all 220)
+  Player.prototype.recheckValue = function (x, k, rolls) {
+    return this.positionValue(S.makeState(x.rows, x.bk, x.uA, x.uB), k - 1, rolls);
+  };
+  // 3. the choice: among those within the round's margin of the best (by u), the fewest
+  //    digits booked, then the best estimate (equal estimates: the booking tie-breaks)
+  Player.prototype.pickBooking = function (list, k) {
+    const margin = Math.max(TIE, this.tieMargin(k));
+    let bu = -Infinity;
+    for (const x of list) if (x.u > bu) bu = x.u;
+    let b = null;
+    for (const x of list) {
+      if (x.u < bu - margin) continue;
+      if (b === null || x.cand.n < b.cand.n || (x.cand.n === b.cand.n && (x.u > b.u + TIE || (Math.abs(x.u - b.u) <= TIE && S.tieBreakBetter(x.cand, b.cand))))) b = x;
+    }
+    return b;
+  };
+  Player.prototype.bookingResult = function (best) {
     return { placements: best.cand.placements.map(p => ({ ...p, category: S.CAT_NAMES[p.cat] })), value: best.v };
   };
 

@@ -1519,7 +1519,7 @@ function ScoreTrack({
       position: 'relative',
       top: -0.5,
       display: 'inline-block',
-      transform: IS_WINDOWS ? 'translate(-3px, -2px)' : 'none'
+      transform: IS_WINDOWS ? 'translate(-4px, -1px)' : 'none'
     }
   }, "\uD83D\uDCAF")), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1885,7 +1885,7 @@ function runPreviewJob(state, roundsLeft, classicMode, onProgress, onDone, maxWo
 // --- Computer player (ai/simili-ai.js, run in Web Workers; rounds 9 and 10 exact).
 // Each returns { promise, cancel }.
 // A few messages for the workers (at most 3 at a time), answers in the same order.
-function runAiJobs(msgs) {
+function runAiJobs(msgs, maxWorkers) {
   let cancelled = false;
   const workers = [];
   const cancel = () => {
@@ -1919,7 +1919,7 @@ function runAiJobs(msgs) {
       });
     };
     try {
-      for (let i = 0; i < Math.min(3, msgs.length); i++) {
+      for (let i = 0; i < Math.min(maxWorkers || 3, msgs.length); i++) {
         const w = new Worker('ai/simili-worker.js');
         w.onerror = ev => {
           ev.preventDefault();
@@ -2064,6 +2064,54 @@ function computerBooking(state, cat, bankList, k, classicMode) {
         stop();
         if (net) net.cancel();
         if (rank) rank.cancel();
+      }
+    };
+  }
+  if (k >= 4) {
+    // Rounds 1-7: the network's shortlist, then its re-check of each booking over all 220
+    // rolls (the slow part), one booking per worker, then the choice (as aiBooking would)
+    let cur = null,
+      cancelled = false;
+    const run = (msgs, max) => {
+      if (cancelled) return new Promise(() => {});
+      cur = runAiJobs(msgs, max);
+      return cur.promise;
+    };
+    const base = stateMsg(state, classicMode);
+    const promise = run([{
+      ...base,
+      type: 'aiShortlist',
+      k,
+      cat,
+      bankList,
+      top: 6
+    }]).then(([r]) => {
+      if (r.best) return r.best;
+      const n = Math.max(1, Math.min(r.list.length, 8, (navigator.hardwareConcurrency || 2) - 1));
+      return run(r.list.map(x => ({
+        rows: Array.from(x.rows),
+        bank: Array.from(x.bk),
+        usedA: x.uA,
+        usedB: x.uB,
+        classic: !!classicMode,
+        type: 'aiRecheck',
+        k
+      })), n).then(vs => run([{
+        ...base,
+        type: 'aiPick',
+        k,
+        list: r.list.map((x, i) => ({
+          ...x,
+          v: vs[i].v,
+          u: vs[i].u
+        }))
+      }])).then(([p]) => p.best);
+    });
+    return {
+      promise,
+      cancel: () => {
+        cancelled = true;
+        if (cur) cur.cancel();
       }
     };
   }
@@ -5472,7 +5520,7 @@ window.Simili = function Simili() {
       fontSize: 12,
       opacity: 0.7
     }
-  }, twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, "P1: ", matchScores.reduce((s, g) => s + g.p1, 0), " \xB7 P2: ", matchScores.reduce((s, g) => s + (g.p2 || 0), 0), /*#__PURE__*/React.createElement("br", null), matchScores.map((g, i) => /*#__PURE__*/React.createElement("span", {
+  }, twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, "P1: ", matchScores.reduce((s, g) => s + g.p1, 0), " \xB7 ", cpuIdx === 1 ? 'CPU' : 'P2', ": ", matchScores.reduce((s, g) => s + (g.p2 || 0), 0), /*#__PURE__*/React.createElement("br", null), matchScores.map((g, i) => /*#__PURE__*/React.createElement("span", {
     key: i,
     style: {
       marginRight: 8

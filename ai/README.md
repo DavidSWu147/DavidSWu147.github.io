@@ -400,8 +400,12 @@ How it decides (all in Web Workers, so the page has to be served over http(s), a
 GitHub Pages):
 - Rounds 1-7: the networks below (`ai/model.json`, or `ai/model-small.json` until that
   exists), with the top 6 bookings re-checked one round deeper, over all 220 rolls
-  (a few seconds; it used to be 8 random rolls, whose luck alone often decided between
-  near-equal bookings). Estimates within a margin of the best count as tied, and among
+  (it used to be 8 random rolls, whose luck alone often decided between near-equal
+  bookings). The re-checks are almost all of the time (the shortlist takes milliseconds)
+  and take longer as the bank grows, so the page runs them in parallel, one booking per
+  worker (`bookingShortlist`, `recheckValue`, `pickBooking`: the same choice as
+  `chooseBooking` in one go; 28 of 28 identical in a test, and about 4x faster with 6+
+  cores, since the slowest re-check then sets the time). Estimates within a margin of the best count as tied, and among
   them the computer books the fewest digits (then the best estimate): 0.5 points of win chance in Rounds 2 and 3, then 0.4, 0.3, 0.2 and 0.1
   in Rounds 4-7 (`TIE_MARGIN` in `simili-ai.js`). The networks are off by 1-2 points on
   average in the early rounds, so smaller differences mean nothing. Example: Round 2,
@@ -419,7 +423,10 @@ GitHub Pages):
   bounds and only reported a best so far after 24 positions; in a game where the computer
   booked 5 and an extra 4 in Matching (94.7% to win) the best play, the 5 alone (97.4%),
   was 82nd of 137 in that order and 11th in the network's.)
-- Rounds 9 and 10: exact (the same solver as the Hint). Categories that tie on everything
+- Rounds 9 and 10: exact (the same solver as the Hint). Its Round 9 category values are the
+  Round 9 odds of its position, solved across all the workers (the odds preview's job) and
+  started as soon as its Round 8 booking is decided, so they are usually ready, or nearly,
+  when Round 9 begins; the odds panel on its sheet shares the same job and result. Categories that tie on everything
   (a sure win with the same points if win and Quad chance) go to the one whose best booking
   from the bank alone (this round's roll treated as unbookable) scores the most points, then
   books the fewest digits, then Sequence, Matching, Ladder. (In Round 9 with a Ladder of

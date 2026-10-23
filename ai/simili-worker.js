@@ -14,6 +14,7 @@
 //  - { type: 'aiBooking', k, cat, bankList, recheckRolls }: the computer player's booking
 //  - { type: 'aiRank', k, cat, bankList, top }: its `top` bookings by the network alone, best first
 //  - { type: 'aiValues', k, states }: the network's utility for each of the states
+//  - { type: 'aiShortlist' / 'aiRecheck' / 'aiPick', ... }: aiBooking's three steps (Rounds 1-7)
 importScripts('simili-solver.js');
 let solver = null, solverClassic = null;
 // Smaller caches than the solver's defaults: a page runs up to 8 of these workers at once,
@@ -46,6 +47,18 @@ async function aiJob(m) {
   if (m.type === 'aiValues') return { values: m.states.map(p => SimiliAI.utility(pl.value(Int16Array.from(p.rows), Int8Array.from(p.bank), p.usedA, p.usedB, m.k))) };
   // the network's ranking of the bookings (orders the computer's exact Round 8 search)
   if (m.type === 'aiRank') return { ranked: pl.rankBookings(st, m.cat, m.bankList, m.k, m.top || 40) };
+  // the booking in Rounds 1-7 in three steps, so the page can spread the re-checks over the
+  // workers (same result as aiBooking): the shortlist, each item's re-check over all 220
+  // rolls (m.rows etc.: that item's position), then the choice among the re-checked
+  if (m.type === 'aiShortlist') {
+    const sl = pl.bookingShortlist(st, m.cat, m.bankList, m.k, m.top || 6);
+    return sl.best ? { best: pl.bookingResult(sl.best) } : { list: sl.list };
+  }
+  if (m.type === 'aiRecheck') {
+    const v = pl.positionValue(st, m.k - 1);
+    return { v, u: SimiliAI.utility(v) };
+  }
+  if (m.type === 'aiPick') return { best: pl.bookingResult(pl.pickBooking(m.list, m.k)) };
   // the re-check over all 220 rolls in Rounds 2-7 (a few seconds); in Round 8 it uses the
   // exact solver, so a sample of rolls there
   let rolls = 'all';
@@ -57,7 +70,7 @@ async function aiJob(m) {
 }
 self.onmessage = e => {
   const m = e.data;
-  if (m.type === 'aiCategory' || m.type === 'aiBooking' || m.type === 'aiRank' || m.type === 'aiValues') {
+  if (m.type === 'aiCategory' || m.type === 'aiBooking' || m.type === 'aiRank' || m.type === 'aiValues' || m.type === 'aiShortlist' || m.type === 'aiRecheck' || m.type === 'aiPick') {
     aiJob(m).then(r => self.postMessage({ id: m.id, ...r }), err => self.postMessage({ id: m.id, error: String(err && err.message || err) }));
     return;
   }
