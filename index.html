@@ -1922,7 +1922,7 @@ function computerCategory(state, k, classicMode) {
 // Booking after the roll. Round 8 (k = 3): the Round 8 Hint's exact search, if it finishes
 // within R8_COMPUTER_SECONDS; else its best so far; else (nothing found yet, as on big
 // Sequence decisions) the network's choice, re-checked with the exact solver.
-const R8_COMPUTER_SECONDS = 30;
+const R8_COMPUTER_SECONDS = 60;
 function computerBooking(state, cat, bankList, k, classicMode) {
   if (k === 3) {
     let stop = () => {},
@@ -3897,9 +3897,8 @@ window.Simili = function Simili() {
   // Computer Player: in 1-player games the computer plays (you watch); with 2 players it is Player 2
   const [computerPlayer, setComputerPlayer] = useState(false);
   const cpuIdx = computerPlayer ? twoPlayer ? 1 : 0 : -1;
-  const nameOf = i => i === cpuIdx ? 'Computer' : `Player ${i + 1}`;
   // on the win screens: against the computer, the one human is just "Player"
-  const winnerName = i => i === cpuIdx ? 'Computer' : computerPlayer ? 'Player' : `Player ${i + 1}`;
+  const nameOf = i => i === cpuIdx ? 'Computer' : computerPlayer ? 'Player' : `Player ${i + 1}`;
   const [seedRolls, setSeedRolls] = useState(null);
   const [isSeededGame, setIsSeededGame] = useState(false);
   const allSeedsRef = useRef(null);
@@ -5529,9 +5528,9 @@ window.Simili = function Simili() {
       p2W = gameOverInfo[1]?.won;
     const p1S = gameOverInfo[0]?.score || 0,
       p2S = gameOverInfo[1]?.score || 0;
-    if (p1W && p2W) return p1S > p2S ? `Both Win — ${winnerName(0)} Wins More!` : p2S > p1S ? `Both Win — ${winnerName(1)} Wins More!` : 'Both Win — Tied!';
-    if (p1W) return `${winnerName(0)} Wins!`;
-    if (p2W) return `${winnerName(1)} Wins!`;
+    if (p1W && p2W) return p1S > p2S ? `Both Win — ${nameOf(0)} Wins More!` : p2S > p1S ? `Both Win — ${nameOf(1)} Wins More!` : 'Both Win — Tied!';
+    if (p1W) return `${nameOf(0)} Wins!`;
+    if (p2W) return `${nameOf(1)} Wins!`;
     if (gameOverInfo[0]?.unwinnable && gameOverInfo[1]?.unwinnable) return 'This game was impossible to win!';
     return 'Game Over — Neither Player Won';
   })()), /*#__PURE__*/React.createElement("div", {
@@ -5703,7 +5702,7 @@ window.Simili = function Simili() {
         fontSize: 18,
         color: '#2a6fdb'
       }
-    }, winnerName(0)), /*#__PURE__*/React.createElement("div", {
+    }, nameOf(0)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 28
       }
@@ -5718,7 +5717,7 @@ window.Simili = function Simili() {
         fontSize: 18,
         color: '#d4442a'
       }
-    }, winnerName(1)), /*#__PURE__*/React.createElement("div", {
+    }, nameOf(1)), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 28
       }
@@ -5783,7 +5782,7 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 12
       }
-    }, winnerName(result.winner - 1), " Wins the Match!", result.tiebreak && /*#__PURE__*/React.createElement("div", {
+    }, nameOf(result.winner - 1), " Wins the Match!", result.tiebreak && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 13,
         fontWeight: 'normal',
@@ -5876,7 +5875,7 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 8
       }
-    }, "\uD83C\uDFC6 ", winnerName(p1M > p2M ? 0 : 1), " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("button", {
+    }, "\uD83C\uDFC6 ", nameOf(p1M > p2M ? 0 : 1), " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("button", {
       onClick: handleReset,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
