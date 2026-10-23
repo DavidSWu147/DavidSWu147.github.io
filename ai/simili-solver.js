@@ -1567,6 +1567,25 @@
     }
     return best !== null && beats(best) ? best : null;
   };
+  // Round 10 categories that tie on everything (a sure win, the same points if win and the
+  // same Quad chance): the one whose best booking from the bank alone (as if the roll's
+  // digits could not be booked) uses the fewest digits; then Sequence, Matching, Ladder.
+  // cats: the tied categories in that order.
+  Solver.prototype.fewestDigitsCategory = function (st, cats) {
+    const bankList = [];
+    for (let d = 0; d < 10; d++) for (let k = 0; k < st.bank[d]; k++) bankList.push({ digit: d, used: false });
+    // (the bank-only booking's score first, so a category that cannot reach 100 that way
+    // never wins by booking nothing)
+    let best = cats[0], top = -1, fewest = Infinity;
+    for (const c of cats) {
+      const r = this.bestBooking(st, c, bankList, 1);
+      const rows = Int16Array.from(st.rows);
+      for (const p of r.placements) { const x = dec(rows[p.cat * 5 + p.row]); x[p.col] = p.digit; rows[p.cat * 5 + p.row] = enc(x); }
+      const score = terminalScore(rows, this.classic), n = r.placements.length;
+      if (score > top || (score === top && n < fewest)) { top = score; fewest = n; best = c; }
+    }
+    return best;
+  };
   // Value-equivalent round-8 bookings grouped by resulting position, each group with
   // its tie-break-best booking.
   Solver.prototype.bookingGroups = function (st, cat, bankList, roundsLeft) {

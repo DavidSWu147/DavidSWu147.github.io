@@ -1906,6 +1906,12 @@ function computerCategory(state, k, classicMode) {
       const better = k <= 2 ? SimiliSolver.compareFirst3(rs[c].raw, rs[b].raw) > 0 : rs[c].value.u > rs[b].value.u + 1e-7;
       if (better) b = c;
     }
+    // Round 10, a sure win tied on everything: the category needing the fewest digits from
+    // the bank alone, then Sequence, Matching, Ladder (fewestDigitsCategory in simili-solver.js)
+    if (k === 1 && rs[b].raw[0] === 1000) {
+      const tied = [0, 1, 2].filter(c => SimiliSolver.compareFirst3(rs[c].raw, rs[b].raw) === 0);
+      if (tied.length > 1) b = previewMainSolver(classicMode).fewestDigitsCategory(state, tied);
+    }
     return SimiliSolver.CAT_NAMES[b];
   });
   return {

@@ -419,7 +419,10 @@ GitHub Pages):
   bounds and only reported a best so far after 24 positions; in a game where the computer
   booked 5 and an extra 4 in Matching (94.7% to win) the best play, the 5 alone (97.4%),
   was 82nd of 137 in that order and 11th in the network's.)
-- Rounds 9 and 10: exact (the same solver as the Hint).
+- Rounds 9 and 10: exact (the same solver as the Hint). In Round 10, categories that tie on
+  everything (a sure win with the same points if win and Quad chance) go to the one whose
+  best booking from the bank alone (the roll's digits treated as unbookable) books the
+  fewest digits, then Sequence, Matching, Ladder.
 
 Games with the computer have statistics pages of their own: "1 Computer Player" (the
 computer alone) and "Human vs Computer" (you as Player 1), each for single games and
