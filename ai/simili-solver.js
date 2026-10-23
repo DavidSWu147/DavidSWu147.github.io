@@ -1335,7 +1335,21 @@
 
   // Values at round start, per category. roundsLeft counts the current round.
   Solver.prototype.analyzeRoundStart = function (st, roundsLeft) {
-    return summarize(CAT_NAMES.map((name, cat) => this.categoryValue(st, cat, roundsLeft)), roundsLeft);
+    return this.breakSummaryTie(st, summarize(CAT_NAMES.map((name, cat) => this.categoryValue(st, cat, roundsLeft)), roundsLeft), roundsLeft);
+  };
+  // Rounds 9 and 10 (roundsLeft <= 2): when the best category is a sure win and another ties
+  // it on points if win and Quad too, the one fewestDigitsCategory picks (the most points
+  // from the bank alone, then the fewest digits; then Sequence, Matching, Ladder).
+  // values: the raw category values (win scaled by 1000 per round left); b: the best so far.
+  Solver.prototype.sureWinTieBreak = function (st, values, roundsLeft, b) {
+    if (roundsLeft > 2 || values[b][0] !== Math.pow(1000, roundsLeft)) return b;
+    const tied = [0, 1, 2].filter(c => cmp3(values[c], values[b]) === 0);
+    return tied.length > 1 ? this.fewestDigitsCategory(st, tied) : b;
+  };
+  // The same for an analyzeRoundStart / summarize result (its ★ category)
+  Solver.prototype.breakSummaryTie = function (st, summary, roundsLeft) {
+    const b = this.sureWinTieBreak(st, summary.categories.map(c => c.value), roundsLeft, CAT_NAMES.indexOf(summary.best));
+    return { ...summary, best: CAT_NAMES[b] };
   };
   // Turn the three raw category values into the analyzeRoundStart result.
   function summarize(values, roundsLeft) {

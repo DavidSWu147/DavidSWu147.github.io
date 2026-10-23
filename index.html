@@ -1454,6 +1454,8 @@ function GridCell({
 }
 
 // --- Score Track ---
+// Windows draws 💯 (Segoe UI Emoji) a little right of and below where macOS does, off centre over the ♥
+const IS_WINDOWS = typeof navigator !== 'undefined' && /Win/i.test(navigator.userAgentData && navigator.userAgentData.platform || navigator.platform || navigator.userAgent || '');
 function ScoreTrack({
   score,
   bonusIII,
@@ -1515,7 +1517,9 @@ function ScoreTrack({
       fontSize: 16,
       color: adjustedScore >= 100 ? '#c0392b' : '#ccc',
       position: 'relative',
-      top: -0.5
+      top: -0.5,
+      display: 'inline-block',
+      transform: IS_WINDOWS ? 'translate(-3px, -2px)' : 'none'
     }
   }, "\uD83D\uDCAF")), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -1711,7 +1715,59 @@ function previewCacheKey(state, roundsLeft, classicMode) {
 function peekPreview(state, roundsLeft, classicMode) {
   return previewResultCache.get(previewCacheKey(state, roundsLeft, classicMode)) || null;
 }
-function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
+// The same position asked for twice while it is being solved (the computer working out its
+// Round 9 category while the odds panel solves the same board, say) shares one job: each
+// caller gets its own progress and result, and the job stops when the last one cancels.
+// opts.maxWorkers caps the workers (when the job is the one started).
+const previewInFlight = new Map();
+function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone, opts) {
+  const cacheKey = previewCacheKey(state, roundsLeft, classicMode);
+  const cached = previewResultCache.get(cacheKey);
+  if (cached) {
+    let off = false;
+    setTimeout(() => {
+      if (!off) onDone(cached);
+    }, 0);
+    return () => {
+      off = true;
+    };
+  }
+  let entry = previewInFlight.get(cacheKey);
+  if (!entry) {
+    entry = {
+      listeners: new Set(),
+      progress: 0
+    };
+    const e = entry;
+    previewInFlight.set(cacheKey, e);
+    e.cancel = runPreviewJob(state, roundsLeft, classicMode, pr => {
+      e.progress = pr;
+      [...e.listeners].forEach(l => l.onProgress(pr));
+    }, r => {
+      if (previewInFlight.get(cacheKey) === e) previewInFlight.delete(cacheKey);
+      const ls = [...e.listeners];
+      e.listeners.clear();
+      ls.forEach(l => l.onDone(r));
+    }, opts && opts.maxWorkers);
+  }
+  const e = entry,
+    l = {
+      onProgress,
+      onDone
+    };
+  e.listeners.add(l);
+  if (e.progress) setTimeout(() => {
+    if (e.listeners.has(l)) onProgress(e.progress);
+  }, 0);
+  return () => {
+    if (!e.listeners.delete(l)) return;
+    if (!e.listeners.size && previewInFlight.get(cacheKey) === e) {
+      previewInFlight.delete(cacheKey);
+      e.cancel();
+    }
+  };
+}
+function runPreviewJob(state, roundsLeft, classicMode, onProgress, onDone, maxWorkers) {
   let cancelled = false;
   const workers = [];
   const cancel = () => {
@@ -1729,6 +1785,8 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
   const doneOuter = onDone;
   onDone = r => {
     if (previewResultCache.size >= 200) previewResultCache.clear();
+    // (the ★ on a sure-win tie in rounds 9 and 10: as the computer would choose)
+    r = previewMainSolver(classicMode).breakSummaryTie(state, r, roundsLeft);
     previewResultCache.set(cacheKey, r);
     doneOuter(r);
   };
@@ -1782,7 +1840,7 @@ function startPreviewJob(state, roundsLeft, classicMode, onProgress, onDone) {
     };
     setTimeout(step, 0);
   };
-  let nWorkers = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1));
+  let nWorkers = Math.max(1, Math.min(maxWorkers || 8, (navigator.hardwareConcurrency || 2) - 1));
   try {
     for (let i = 0; i < nWorkers; i++) {
       const w = new Worker('ai/simili-worker.js');
@@ -1892,6 +1950,25 @@ const stateMsg = (state, classicMode) => ({
 });
 // Category at the start of a round (k rounds left): resolves to 'sequence' / 'matching' / 'ladder'.
 function computerCategory(state, k, classicMode) {
+  if (k === 2) {
+    // Round 9: the same exact values as the Round 9 odds, split over all the workers, shared
+    // with the odds panel, and usually solved already (see the computer's Round 8 booking)
+    let detach = null;
+    const promise = new Promise(resolve => {
+      detach = startPreviewJob(state, 2, classicMode, () => {}, r => {
+        const vs = r.categories.map(c => c.value);
+        let b = 0;
+        for (let c = 1; c < 3; c++) if (SimiliSolver.compareFirst3(vs[c], vs[b]) > 0) b = c;
+        resolve(SimiliSolver.CAT_NAMES[previewMainSolver(classicMode).sureWinTieBreak(state, vs, 2, b)]);
+      });
+    });
+    return {
+      promise,
+      cancel: () => {
+        if (detach) detach();
+      }
+    };
+  }
   const job = runAiJobs([0, 1, 2].map(cat => ({
     ...stateMsg(state, classicMode),
     type: 'aiCategory',
@@ -1906,12 +1983,9 @@ function computerCategory(state, k, classicMode) {
       const better = k <= 2 ? SimiliSolver.compareFirst3(rs[c].raw, rs[b].raw) > 0 : rs[c].value.u > rs[b].value.u + 1e-7;
       if (better) b = c;
     }
-    // Round 10, a sure win tied on everything: the category needing the fewest digits from
-    // the bank alone, then Sequence, Matching, Ladder (fewestDigitsCategory in simili-solver.js)
-    if (k === 1 && rs[b].raw[0] === 1000) {
-      const tied = [0, 1, 2].filter(c => SimiliSolver.compareFirst3(rs[c].raw, rs[b].raw) === 0);
-      if (tied.length > 1) b = previewMainSolver(classicMode).fewestDigitsCategory(state, tied);
-    }
+    // Rounds 9 and 10, a sure win tied on everything: the most points, then the fewest digits,
+    // from the bank alone, then Sequence, Matching, Ladder (sureWinTieBreak in simili-solver.js)
+    if (k <= 2) b = previewMainSolver(classicMode).sureWinTieBreak(state, rs.map(r => r.raw), k, b);
     return SimiliSolver.CAT_NAMES[b];
   });
   return {
@@ -2572,21 +2646,26 @@ function NextRoundPreview({
       progress: 0,
       started: Date.now()
     });
-    cancelRef.current = startPreviewJob(state, roundsLeft, classicMode, p => setJob(j => j && j.key === myKey ? {
+    const cancel = startPreviewJob(state, roundsLeft, classicMode, p => setJob(j => j && j.key === myKey ? {
       ...j,
       progress: p
     } : j), r => {
-      cancelRef.current = null;
-      setJob(null);
+      // (a preview that has since been replaced by another leaves the new one alone)
+      if (cancelRef.current === cancel) cancelRef.current = null;
+      setJob(j => j && j.key === myKey ? null : j);
       seenRef.current.set(myKey, r);
       setResult({
         key: myKey,
         r
       });
     });
+    cancelRef.current = cancel;
   };
+  // runs for every new booking from a hint, even when the booking changes again while the
+  // previous one's preview is still going (as when a Round 8 Hint finds a better play a moment
+  // after its first): that preview is cancelled above and this one starts in its place
   useEffect(() => {
-    if (autoRun && !job && !seenRef.current.has(key)) start();
+    if (autoRun && !(job && job.key === key) && !seenRef.current.has(key)) start();
   }, [autoRun, key]);
   const stop = () => {
     if (cancelRef.current) cancelRef.current();
@@ -2740,7 +2819,8 @@ function PlayerSheet({
   round9Odds,
   r8Job,
   computer,
-  categoryLocked
+  categoryLocked,
+  playerName
 }) {
   const grids = ps.grids;
   const seqBonusI = hasSequenceBonusI(grids);
@@ -2764,7 +2844,7 @@ function PlayerSheet({
   const canSelectBank = !computer && (phase === 'book' && !ps.roundDone && (ps.bonusBookPhase || ps.bookingsThisRound < ps.maxBooking) || phase === 'endgame-bonus' && ps.bonusBookPhase && !ps.roundDone);
 
   // computer (Computer Player setting): played by the computer, you only click its End Round
-  const playerLabel = computer ? 'Computer' : twoPlayer ? `Player ${playerIdx + 1}` : null;
+  const playerLabel = computer ? 'Computer' : twoPlayer ? playerName || `Player ${playerIdx + 1}` : null;
   // the computer's category: hidden (buttons, none highlighted) until you reveal it or roll
   const cpuShown = !!(computer && ps.chosenCategory && !computer.hideCategory);
   const playerColor = playerIdx === 0 ? '#2a6fdb' : '#d4442a';
@@ -4675,6 +4755,12 @@ window.Simili = function Simili() {
   // It picks its category at the start of each round and books after the roll; you click
   // ROLL and its End Round. With 2 players its booking is shown once you have ended your turn.
   const cpuKey = what => `${gameNumberRef.current}-${round}-${what}`;
+  // its Round 9 category, worked out ahead (see its booking); let go once used or the game moves on
+  const cpuPonderRef = useRef(null);
+  const stopCpuPonder = () => {
+    if (cpuPonderRef.current) cpuPonderRef.current();
+    cpuPonderRef.current = null;
+  };
   const startCpu = (key, stage, job, onResult) => {
     if (cpuRef.current.cancel) cpuRef.current.cancel();
     cpuRef.current = {
@@ -4713,6 +4799,7 @@ window.Simili = function Simili() {
       state
     } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(p) : p, bank.map(b => b.digit));
     startCpu(key, 'category', computerCategory(state, TOTAL_ROUNDS - round, classicMode), cat => {
+      stopCpuPonder();
       updatePlayer(cpuIdx, {
         chosenCategory: cat
       });
@@ -4746,6 +4833,17 @@ window.Simili = function Simili() {
         },
         start
       });
+      // Round 8: its Round 9 position is known now, so it starts on its Round 9 category while
+      // you finish your turn (with you playing too: 4 workers, as many as its Round 8 search just
+      // let go, since your Round 8 Hint may be running)
+      if (round === TOTAL_ROUNDS - 3) {
+        const after = hintedPlayer(start, best);
+        const st9 = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(after) : after, bank.map(b => b.digit)).state;
+        stopCpuPonder();
+        cpuPonderRef.current = startPreviewJob(st9, 2, classicMode, () => {}, () => {}, {
+          maxWorkers: twoPlayer ? 4 : 0
+        });
+      }
     });
   }, [cpuIdx, phase, round, players]);
   // show it (with 2 players, once Player 1 has ended the turn)
@@ -4766,9 +4864,11 @@ window.Simili = function Simili() {
       key: null,
       cancel: null
     };
+    stopCpuPonder();
   }, [phase, cpuIdx]);
   useEffect(() => () => {
     if (cpuRef.current.cancel) cpuRef.current.cancel();
+    stopCpuPonder();
   }, []);
   const cpuThinking = !!cpu && (cpu.stage === 'category' || cpu.stage === 'booking');
   const [, setCpuTick] = useState(0);
@@ -5474,6 +5574,7 @@ window.Simili = function Simili() {
     round9Odds: round9Odds ? round9Odds[idx] : null,
     r8Job: r8Jobs[idx] || null,
     computer: cpuView(idx),
+    playerName: nameOf(idx),
     categoryLocked: idx !== cpuIdx && cpuRevealed && phase === 'choose'
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {

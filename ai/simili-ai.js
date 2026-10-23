@@ -352,11 +352,9 @@
       let b = 0;
       for (let c = 1; c < 3; c++) if (S.compareFirst3(vs[c], vs[b]) > 0) b = c;
       const sc = Math.pow(1000, k);
-      // Round 10, a sure win tied on everything: fewest digits from the bank (see fewestDigitsCategory)
-      if (k === 1 && vs[b][0] === sc) {
-        const tied = [0, 1, 2].filter(c => S.compareFirst3(vs[c], vs[b]) === 0);
-        if (tied.length > 1) b = this.solver.fewestDigitsCategory(st, tied);
-      }
+      // Rounds 9 and 10, a sure win tied on everything: the most points and fewest digits from
+      // the bank alone (see sureWinTieBreak / fewestDigitsCategory)
+      b = this.solver.sureWinTieBreak(st, vs, k, b);
       return { cat: b, values: vs.map(v => [v[0] / sc, v[1] / sc / 150, v[2] / sc]), exact: true };
     }
     const values = this.categoryValues(st, k, rolls);
