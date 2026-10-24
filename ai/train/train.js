@@ -3,12 +3,20 @@
 //
 //   node ai/train/train.js [--games 40000] [--labels 40000] [--rolls 12] [--iterations 3]
 //                          [--hidden 64] [--epochs 15] [--workers <cores>] [--out ai/model.json]
+//                          [--partner ai/model-small.json] [--partnerShare 0.5]
 //
 // Backwards, round by round: positions at the start of rounds 2-9 come from self-play
 // games; N[2] (start of round 9) learns values worked out by the exact solver, N[3]
 // learns one-step look-ahead values using N[2], and so on up to N[9] (start of round 2).
 // The first pass plays the games with a rough player; later passes with the computer
 // player trained so far, so the positions look more like real play.
+//
+// --partner <model file>: in the passes still to run, a share (--partnerShare, default half)
+// of the self-play games is played by that model's computer instead of the previous
+// pass's, so the positions cover the way both of them play (pass 6 from pass 5 and the
+// small model, say, which between them play both the SM and LM strategies). Only
+// the positions change: their values are worked out as always (the exact solver, then
+// one-step look-ahead with the networks of this pass).
 //
 // It can be stopped at any time (Ctrl+C) and started again with the same command: it
 // picks up after the last finished network. Intermediate files go to ai/train/data/.
@@ -23,13 +31,13 @@ const args = (() => {
   const a = {
     games: 40000, labels: 40000, rolls: 12, iterations: 3, hidden: 64, epochs: 15,
     workers: Math.max(1, os.cpus().length), out: path.join(__dirname, '..', 'model.json'),
-    classic: 0.25, seed: 1, check: 300, verbose: 0, stopAfter: 0,
+    classic: 0.25, seed: 1, check: 300, verbose: 0, stopAfter: 0, partner: '', partnerShare: 0.5,
   };
   const v = process.argv.slice(2);
   for (let i = 0; i < v.length; i++) {
     const k = v[i].replace(/^--/, '');
     if (!(k in a)) { console.error('unknown option --' + k); process.exit(1); }
-    a[k] = k === 'out' ? v[++i] : +v[++i];
+    a[k] = k === 'out' || k === 'partner' ? v[++i] : +v[++i];
   }
   return a;
 })();
@@ -103,6 +111,9 @@ const posKey = p => p.rows.join(',') + '|' + p.bank.join('') + '|' + p.uA + p.uB
 async function main() {
   log(`SIMILI training: ${args.workers} workers, ${args.games} games, ${args.labels} labels per round, ${args.rolls} rolls per label, ${args.iterations} passes -> ${args.out}`);
   const model = loadModel();
+  if (model.meta.iterationsDone) log(`Continuing from pass ${model.meta.iterationsDone} (${args.out})`);
+  const partner = args.partner ? { nets: JSON.parse(fs.readFileSync(args.partner, 'utf8')).nets } : null;
+  if (partner) log(`Partner: ${args.partner} plays ${Math.round(args.partnerShare * 100)}% of each pass's games`);
   while (model.meta.inProgress) {
     const it = model.meta.inProgress.iteration;
     log(`Pass ${it} of ${args.iterations}`);
@@ -116,11 +127,17 @@ async function main() {
       // the computer from the previous pass plays (pass 1: the rough player)
       const policy = it === 1 ? null : { nets: model.nets };
       const chunk = 25, jobs = [];
-      for (let g = 0; g < args.games; g += chunk) {
+      // with --partner: chunks spread evenly between the two players
+      const byPartner = ci => !!partner && Math.floor((ci + 1) * args.partnerShare) > Math.floor(ci * args.partnerShare);
+      for (let g = 0, ci = 0; g < args.games; g += chunk, ci++) {
+        const p = byPartner(ci);
         jobs.push({ type: 'games', n: Math.min(chunk, args.games - g), seed: args.seed * 1e6 + it * 1e5 + g, classicShare: args.classic,
-          model: policy, modelId: policy ? `play-${it}` : 'rough', opts: {} });
+          model: p ? partner : policy, modelId: p ? `partner-${it}` : policy ? `play-${it}` : 'rough', opts: {} });
       }
-      log(`  playing ${args.games} games (${it === 1 ? 'rough player' : 'computer player from pass ' + (it - 1)})`);
+      const nPartner = jobs.filter(j => j.modelId.startsWith('partner')).reduce((a, j) => a + j.n, 0);
+      const own = it === 1 ? 'rough player' : 'computer player from pass ' + (it - 1);
+      log(`  playing ${args.games} games (${partner ? `${args.games - nPartner} by the ${own}, ${nPartner} by ${args.partner}` : own})`);
+      if (partner) model.meta.stats[`${it}-partner`] = { file: args.partner, games: nPartner };
       const res = await runAll(jobs, progressBar('games'));
       byK = {};
       for (let k = 2; k <= 9; k++) byK[k] = [];
