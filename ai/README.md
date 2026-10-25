@@ -73,7 +73,7 @@ Each worker keeps its solver caches small (20,000 tables, 200,000 round-10 posit
 with the solver's defaults one worker grew to about 1.4 GB on a big Sequence decision,
 and a tab with 7 of them was killed by the browser. With the smaller caches a 7-worker
 search levels off at about 2.2 GB for the whole browser, at roughly 20% less speed.
-The computer player's own 30-second Round 8 search uses at most 4 workers, since it can
+The computer player's own 60-second Round 8 search uses at most 4 workers, since it can
 run at the same time as your Hint.
 While it works, a gold progress bar and the time so far sit next to the button; the
 blue bar further down is the Round 9 odds preview, a separate job. There is no time
@@ -98,6 +98,16 @@ take far too long to finish, so the search goes for the likeliest plays first:
 4. when every position has been checked (or skipped because its bound shows it
    cannot win), the note says "Best play · all plays checked", or "Better play
    found · all plays checked" if the last step changed the booking.
+
+Plays that leave 100 out of reach even with every digit at hand (`canStillReach100`,
+see "Certain losses" below) are never solved when another play can still reach it: they
+go last, behind a best so far, and are skipped. Example: Ladder chosen at 40 points with
+678_, _34_, _67_ in Sequence and 000_, 222_ in Matching. Only 4 of the 184 possible plays
+can still win (three digits into one Ladder row, then 5 Sequences for II-A, whose free
+book finishes the Ladder): 001_ and 110_ (87.8259%), 112_ (35.0791%) and 009_ (30.3554%).
+Before, the search could not tell the other 180 were hopeless (its bounds allow for the
+free books) and partly solved each of them. With 2 workers the whole search now takes 243 s instead of
+1,355 s (same answer).
 
 Taking the hint back stops it from booking anything by itself; "Hint ready" then
 offers the latest best. The ranking is only used for the order, so the final answer
@@ -457,6 +467,21 @@ Estimates are never exactly equal, so the usual order (win, points if win, Quad)
 score in which 5 more points if win count like about 0.07% more win chance and a sure
 Quad like 0.2%.
 
+**Certain losses.** Before trusting a network, the computer checks whether 100 can be
+reached at all (`canStillReach100` in `simili-solver.js`): with every digit always at
+hand, can the rounds left still fill enough cells? A round gives 3 cells in its category
+(4 in Sequence with Bonus I), each free book still to come one more, plus Bonus III. If
+not, the position is lost whatever the dice do: win chance and points are 0 (the Quad
+estimate stays). Booking nothing in Rounds 1-4 is such a loss in Classic; in Modern only
+nothing through Round 5 is (through Round 4, the all-out Sequence line with both free
+books and Bonus III still reaches exactly 100). The networks had never seen these
+positions and valued them anywhere from 6% to 32% (pass 6: Classic, empty board at the
+start of Round 5, 31.6%). The check is optimistic on purpose, so it never calls a
+winnable position lost (`node ai/test/verify-reach.js`: 0 of 5,000+ against the exact
+solver; it catches about 96% of the truly lost ones, the rest being lost for lack of the
+right digits). It also applies in training (labels and self-play use the same values),
+and costs about 1% of the thinking time.
+
 **Inputs.** Each row is one of 102 / 52 / 42 interchangeable classes (see "equivalence
 classes" above), so a category is how many of its rows are in each class. Then the bank
 ("at least 1, 2, 3, 4 copies" of each digit), bonus state and score: 245 inputs, about
@@ -547,6 +572,43 @@ about 7 times as many.
 
 Commit `ai/model.json` (about 1.5 MB); `ai/train/data/` stays out of git.
 
+**Another pass with a second player (`--partner`).** Each pass learns from positions in
+its own computer's games, so it keeps seeing the strategy it already plays. With
+`--partner <model file>`, half of each new pass's games (`--partnerShare`, 0 to 1) are
+played by that model's computer instead. Pass 6 from pass 5 and the small model, which
+play differently (between them, both the SM and the LM strategies):
+```
+node ai/train/train.js --iterations 6 --partner ai/model-small.json
+```
+with the same `--games`, `--labels` and `--rolls` as the earlier passes, and `ai/model.json`
+holding pass 5 (the log starts "Continuing from pass 5"; if not, copy
+`ai/model-pass5.json` over it first). Only which positions are studied changes: their
+values come from the exact solver and the look-ahead as always, so nothing about how to
+play is handed over. It is like a game program training against more than one opponent
+(population or league play). The result goes to `ai/model.json` and `ai/model-pass6.json`;
+compare it with `node ai/train/evaluate.js --model ai/model-pass6.json`.
+
+**Self-play that explores (`--tieRule`, `--explore`).** Pass 6 still played almost only
+SM. In Round 2 the categories are within 0.1-0.4 points of each other, well inside the
+networks' 1-2 point error, so whichever strategy the networks happen to favour wins
+every time. Worse, positions the self-play computer never steers into (an empty board
+at the start of Round 4, an early Ladder) hardly appear in the training data, so their
+values are guesses that nothing corrects: pass 6 valued "book nothing" anywhere from far
+too low (Round 3) to 31.6% (a certain loss in Classic Round 4, now caught by
+`canStillReach100`). Two options for the self-play games:
+- `--tieRule 1`: book as the real computer does (within its tie margin of the best
+  estimate, the fewest digits) instead of always the best estimate, which nearly always
+  booked something;
+- `--explore p` (with `--exploreMargin 0.02`, `--exploreRounds 6`): in Rounds 1-6, each
+  decision is, with chance p, a random pick among the categories or bookings within 2
+  points of win chance of the best, booking nothing always among them unless it makes
+  100 unreachable.
+The values learnt are still the solver's and the look-ahead's, so this changes which
+positions are studied, not what to play. Pass 7:
+```
+node ai/train/train.js --iterations 7 --partner ai/model-small.json --tieRule 1 --explore 0.15
+```
+
 `ai/model-small.json` is the pass-2 model from the small run here (the 75% row above),
 to compare against: `node ai/train/evaluate.js --model ai/model-small.json`.
 
@@ -564,64 +626,58 @@ node ai/test/verify-r8.js [n] [seed]  # round-8 branch and bound == exhaustive s
 node ai/test/verify-tiebreak.js [n]   # round-9 Hint: second/worst-category tie-break == brute force
 node ai/test/verify-save-free.js [n]  # free books saved for round 10: same round-9 values
 node ai/test/verify-canonical.js      # computer player: same estimate for all 20 digit renamings
+node ai/test/verify-r10-standalone.js [n]  # the game's own round-10 calculator == solver, roll by roll
+node ai/test/verify-r10-display.js [n]     # round-10 display == solver == the game's own calculator
+node ai/test/verify-reach.js [n1] [n2]     # canStillReach100 never calls a winnable position lost
 node ai/test/bench.js <round> <count> [start|book]
 ```
 
-`verify.js` compares win chances with the game's own `computeRound10WinChances`.
+`verify.js` compares win chances with the game's own `computeRound10WinChancesStandalone`.
 Wherever they disagree, a brute force using only the game's per-digit legality
 checks decides which one is right.
 
-## Bugs in the game's round-10 calculator
+## The game's own round-10 calculator
 
-The round-10 win chances the game shows (with or without Hints) now come from this
-solver: `computeRound10WinChances` asks it which rolls win and keeps the same outs
-notation. The old search is kept as `computeRound10WinChancesLegacy`, used only if
-`simili-solver.js` fails to load and by the tests as an independent implementation;
-`node ai/test/verify-r10-display.js` checks the display against both. The notes below
-describe the legacy calculator.
+The round-10 win chances the game shows come from this solver:
+`computeRound10WinChances` asks it which rolls win and keeps the same outs notation.
+`index.html` also has a calculator of its own, `computeRound10WinChancesStandalone`,
+used if `simili-solver.js` fails to load and by the tests as an independent check. It is
+exact too, built only from the game's own row rules: every way to raise each row's score,
+a search over one way per row within the digits and books available, and for a
+combination that reaches 100 a check that its bookings can be made in some legal order
+(main books first, then each free book once its bonus is unlocked on the board at that
+moment, including by this round's own bookings, with the "other one outside Sequence,
+this one into Sequence" rule). About 5-8 ms per position for all three categories.
+`node ai/test/verify-r10-standalone.js` compares it with the solver roll by roll on
+Sequence-heavy positions near a Bonus II unlock (any disagreement settled by the brute
+force); `verify-r10-display.js` and `verify.js` compare them too.
 
-`computeRound10WinChancesLegacy` in `index.html` is not exact, in both directions.
-The test harness can apply the first four fixes below (`SIMILI_PATCH_SEQ=1`), and
-`round10-calculator-fix.diff` contains them as a patch to `index.html`.
+It replaced the earlier calculator, which was not exact in both directions:
 
-**False wins (it counts a roll as winning when no legal booking reaches 100):**
+**False wins (it counted a roll as winning when no legal booking reaches 100):**
 
-1. **Phantom Sequence moves.** `getSequenceRowMovesOpt` checks a 3-cell target
-   only against the three cells it covers, not against a digit already in the
-   fourth cell. Example: for the row `__12`, the target 3-2-1 in cells 0-2 is
-   accepted, giving `3212`. Scoring sees three in a row and awards 10, but the
-   game would never let you book it.
-2. **End-of-search free book ignores "must go into Sequence".** If one free
-   book was used outside Sequence, the other must go into Sequence. The shortcut
-   that adds a leftover free book at the end of the search skips that check.
-3. **Overflow into a free book ignores it too.** When the chosen category's
-   main books run out and an extra digit spills into a free book, the same check
-   is skipped (it is only applied to rows outside the chosen category).
-4. **A free book unlocked mid-round has no constraint at all.** The "must go into
-   Sequence" list is only built for free books already unlocked at the start of
-   the round.
+1. **Phantom Sequence moves.** A 3-cell target was checked only against the three
+   cells it covers, not against a digit already in the fourth cell. Example: for the
+   row `__12`, the target 3-2-1 in cells 0-2 was accepted, giving `3212`, which the
+   game would never let you book.
+2. **End-of-search free book ignored "must go into Sequence".** If one free book was
+   used outside Sequence, the other must go into Sequence; a shortcut skipped that.
+3. **Overflow into a free book ignored it too** (the chosen category's extra digit).
+4. **A free book unlocked mid-round had no constraint at all.**
 
-**Missed wins (it reports a loss when a legal win exists):**
+**Missed wins (it reported a loss when a legal win exists):**
 
-5. **Free book on a row that also received main books**, when that same row's
-   completion is what unlocked the free book. The code forbids this on purpose,
-   but the real game allows it. Example: booking 6 and 5 into `___4` makes `_654`
-   the fifth Sequence row scoring 10, unlocking II-A; the free book then puts 7
-   in front for `7654`.
-6. **Chains after a free book.** The end-of-search shortcut never re-checks
-   unlocks or Bonus III after placing a free book. Example: II-A's free book
-   completes a fourth 4-Sequence, which unlocks II-B, whose free book completes
-   the fifth and earns Bonus III.
+5. **Free book on a row that also received main books**, when that row's completion is
+   what unlocked the free book. Example: booking 6 and 5 into `___4` makes `_654` the
+   fifth Sequence row scoring 10, unlocking II-A; the free book then puts 7 in front
+   for `7654`.
+6. **Chains after a free book.** II-A's free book completes a fourth 4-Sequence, which
+   unlocks II-B, whose free book completes the fifth and earns Bonus III.
 
-Measured on 3,000 random round-10 positions (a third Classic, half of them
-Sequence-heavy): with fixes 1-4 applied, 11 rolls still disagree, all of them
-missed wins of type 5 or 6. The brute force sided with the solver every time.
+On the tests' positions, 571 rolls could only be won with a free book unlocked during
+round 10 itself, 272 of them needing II-B as well; the new calculator gets all of them.
 
-Fixes 5 and 6 would mean reworking the search order, so the simpler fix is to
-replace the calculator with this solver's round-10 evaluation, which is exact
-and takes about 1 ms per position.
-
-### Example of a false win (bug 1)
+### Example of a false win (bug 1 in the earlier calculator)
 
 Modern rules, start of round 10, 45 points:
 
@@ -630,12 +686,12 @@ Modern rules, start of round 10, 45 points:
 - **Ladder rows:** `_7__`, `5_6_`, `88_7`, `8___`, 4455
 - **Unused bank digits:** 3, 8
 
-For Sequence, the game reports 0.9% (rolls 0-0-7 and 0-2-7). Only 0-0-7 wins (0.3%):
+For Sequence, the earlier calculator reported 0.9% (rolls 0-0-7 and 0-2-7). Only 0-0-7 wins (0.3%):
 
 1. Book 0 → `_012`, 8 → `678_`, 0 → `2109`. That gives five Sequence rows scoring 10 or more.
 2. This unlocks Bonus II-A. Use the free book to put the 7 into `88_7`.
 3. Final score: exactly 100.
 
-With 0-2-7 the calculator books 0 → `2109`, 8 → `678_` and 3, 2 → `3212`, then
+With 0-2-7 the earlier calculator booked 0 → `2109`, 8 → `678_` and 3, 2 → `3212`, then
 the free book 7 → `8877`. But `3212` is not a legal booking, and the best
 reachable score is 75.

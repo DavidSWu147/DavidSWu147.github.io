@@ -4,6 +4,7 @@
 //   node ai/train/train.js [--games 40000] [--labels 40000] [--rolls 12] [--iterations 3]
 //                          [--hidden 64] [--epochs 15] [--workers <cores>] [--out ai/model.json]
 //                          [--partner ai/model-small.json] [--partnerShare 0.5]
+//                          [--tieRule 1] [--explore 0.15] [--exploreMargin 0.02] [--exploreRounds 6]
 //
 // Backwards, round by round: positions at the start of rounds 2-9 come from self-play
 // games; N[2] (start of round 9) learns values worked out by the exact solver, N[3]
@@ -17,6 +18,12 @@
 // small model, say, which between them play both the SM and LM strategies). Only
 // the positions change: their values are worked out as always (the exact solver, then
 // one-step look-ahead with the networks of this pass).
+//
+// --tieRule 1: the self-play computer books as the real one does (tie margin, then the
+// fewest digits) instead of always taking the best estimate. --explore p: in the first
+// --exploreRounds rounds, each of its decisions is, with chance p, a random pick among
+// the categories / bookings within --exploreMargin (win chance) of the best, booking
+// nothing always among them unless it makes 100 unreachable (see work.js playGame).
 //
 // It can be stopped at any time (Ctrl+C) and started again with the same command: it
 // picks up after the last finished network. Intermediate files go to ai/train/data/.
@@ -32,6 +39,7 @@ const args = (() => {
     games: 40000, labels: 40000, rolls: 12, iterations: 3, hidden: 64, epochs: 15,
     workers: Math.max(1, os.cpus().length), out: path.join(__dirname, '..', 'model.json'),
     classic: 0.25, seed: 1, check: 300, verbose: 0, stopAfter: 0, partner: '', partnerShare: 0.5,
+    tieRule: 0, explore: 0, exploreMargin: 0.02, exploreRounds: 6,
   };
   const v = process.argv.slice(2);
   for (let i = 0; i < v.length; i++) {
@@ -114,6 +122,8 @@ async function main() {
   if (model.meta.iterationsDone) log(`Continuing from pass ${model.meta.iterationsDone} (${args.out})`);
   const partner = args.partner ? { nets: JSON.parse(fs.readFileSync(args.partner, 'utf8')).nets } : null;
   if (partner) log(`Partner: ${args.partner} plays ${Math.round(args.partnerShare * 100)}% of each pass's games`);
+  const playOpts = { tieRule: args.tieRule ? 1 : 0, explore: args.explore, exploreMargin: args.exploreMargin, exploreRounds: args.exploreRounds };
+  if (args.tieRule || args.explore) log(`Self-play: ${args.tieRule ? 'the real computer\'s tie rule' : 'best estimate'}${args.explore ? `, exploring ${Math.round(args.explore * 100)}% of decisions in rounds 1-${args.exploreRounds} (within ${args.exploreMargin * 100} points of the best, booking nothing always a candidate)` : ''}`);
   while (model.meta.inProgress) {
     const it = model.meta.inProgress.iteration;
     log(`Pass ${it} of ${args.iterations}`);
@@ -132,12 +142,13 @@ async function main() {
       for (let g = 0, ci = 0; g < args.games; g += chunk, ci++) {
         const p = byPartner(ci);
         jobs.push({ type: 'games', n: Math.min(chunk, args.games - g), seed: args.seed * 1e6 + it * 1e5 + g, classicShare: args.classic,
-          model: p ? partner : policy, modelId: p ? `partner-${it}` : policy ? `play-${it}` : 'rough', opts: {} });
+          model: p ? partner : policy, modelId: p ? `partner-${it}` : policy ? `play-${it}` : 'rough', opts: playOpts });
       }
       const nPartner = jobs.filter(j => j.modelId.startsWith('partner')).reduce((a, j) => a + j.n, 0);
       const own = it === 1 ? 'rough player' : 'computer player from pass ' + (it - 1);
       log(`  playing ${args.games} games (${partner ? `${args.games - nPartner} by the ${own}, ${nPartner} by ${args.partner}` : own})`);
       if (partner) model.meta.stats[`${it}-partner`] = { file: args.partner, games: nPartner };
+      if (args.tieRule || args.explore) model.meta.stats[`${it}-selfplay`] = playOpts;
       const res = await runAll(jobs, progressBar('games'));
       byK = {};
       for (let k = 2; k <= 9; k++) byK[k] = [];

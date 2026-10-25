@@ -68,27 +68,64 @@ function greedyCategory(sv, st, rand, classic, nRolls) {
 // keyed by rounds left k = 9 .. 2. With a model, the computer plays (with a little
 // randomness, so the positions vary); without one, the rough player above.
 // model: the model, or null for the simple player.
+// opts (train.js --tieRule, --explore ...):
+//  - tieRule: book as the real computer does (among bookings within its tie margin of
+//    the best estimate, the fewest digits) instead of simply the best estimate;
+//  - explore (0-1), exploreMargin (default 0.02 of win chance), exploreRounds (default 6):
+//    in the first exploreRounds rounds, each decision is, with chance `explore`, a random
+//    pick among the near-best: categories within exploreMargin of the best, or bookings
+//    (equivalent ones once) within exploreMargin, with booking nothing always among them
+//    unless it makes 100 unreachable (S.canStillReach100). So the networks also see where
+//    the moves they rate a little lower lead, instead of only ever their own favourites.
+const explored = { cat: 0, book: 0 };
 function playGame(rand, classic, model, modelId, opts) {
   const pl = players(null, modelId)[classic ? 1 : 0];
   const sv = pl.solver;
   let st = S.makeState(new Array(15).fill(EMPTY), new Array(10).fill(0), 0, 0);
   const out = {};
   const eps = opts.eps === undefined ? 0.1 : opts.eps;
+  const xMargin = opts.exploreMargin || 0.02, xRounds = opts.exploreRounds || 6;
   for (let round = 1; round <= 8; round++) {
     const k = 11 - round;
     if (round >= 2) out[k] = { rows: Array.from(st.rows), bank: Array.from(st.bank), uA: st.usedA, uB: st.usedB, classic };
     const useAI = model && pl.nets[k - 1] && rand() >= eps;
+    const exploreHere = () => !!opts.explore && round <= xRounds && rand() < opts.explore;
     let cat;
     if (useAI && rand() >= eps) {
       const rolls = []; for (let i = 0; i < (opts.catRolls || 6); i++) rolls.push(randomRoll(rand));
-      cat = pl.chooseCategory(st, k, rolls).cat;
+      const c = pl.chooseCategory(st, k, rolls);
+      cat = c.cat;
+      if (exploreHere()) {
+        const us = c.values.map(v => AI.utility(v)), bu = Math.max(...us);
+        const near = [0, 1, 2].filter(i => us[i] >= bu - xMargin);
+        cat = near[Math.floor(rand() * near.length)];
+        explored.cat++;
+      }
     } else cat = rand() < 0.1 ? Math.floor(rand() * 3) : greedyCategory(sv, st, rand, classic, 6);
     const bank = Int8Array.from(st.bank); for (const d of randomRoll(rand)) bank[d]++;
     const list = options(sv, st, cat, bank);
     let pick;
     if (useAI) {
       let bu = -Infinity;
-      for (const o of list) { const u = AI.utility(pl.value(o.rows, o.bk, o.uA, o.uB, k - 1)); if (u > bu) { bu = u; pick = o; } }
+      for (const o of list) { o.u = AI.utility(pl.value(o.rows, o.bk, o.uA, o.uB, k - 1)); if (o.u > bu) { bu = o.u; pick = o; } }
+      if (exploreHere()) {
+        const seen = new Set(), near = [];
+        for (const o of list) {
+          const key = sv.key(o.rows, o.bk, o.uA, o.uB, k - 1);
+          if (seen.has(key)) continue;
+          if (o.u >= bu - xMargin || (o.n === 0 && S.canStillReach100(o.rows, o.uA, o.uB, k - 1, classic))) { seen.add(key); near.push(o); }
+        }
+        pick = near[Math.floor(rand() * near.length)];
+        explored.book++;
+      } else if (opts.tieRule) {
+        const margin = Math.max(AI.TIE, pl.tieMargin(k));
+        let b = null;
+        for (const o of list) {
+          if (o.u < bu - margin) continue;
+          if (b === null || o.n < b.n || (o.n === b.n && o.u > b.u + AI.TIE)) b = o;
+        }
+        pick = b;
+      }
     } else pick = heuristicPick(list, rand, classic);
     st = S.makeState(pick.rows, pick.bk, pick.uA, pick.uB);
   }
@@ -131,7 +168,7 @@ function exactValue2(pos) {
 // simple greedy player ('greedy': most points now, category by the average over a few
 // rolls), both exact in rounds 9 and 10. Returns the final score, Quad, and what
 // happened in round 1, plus the computer's own estimate at the start of round 2.
-function evalGame(rolls, classic, policy, model, modelId, catRolls, recheck) {
+function evalGame(rolls, classic, policy, model, modelId, catRolls, recheck, margins) {
   const pl = players(model, modelId)[classic ? 1 : 0];
   const sv = pl.solver;
   let st = S.makeState(new Array(15).fill(EMPTY), new Array(10).fill(0), 0, 0);
@@ -162,7 +199,10 @@ function evalGame(rolls, classic, policy, model, modelId, catRolls, recheck) {
     for (const d of rolls[round - 1]) bankList.push({ digit: d, used: false });
     let res;
     if (policy === 'ai' || k <= 2) {
-      const rc = recheck && recheck.top > 1 ? { top: recheck.top, rolls: Array.from({ length: recheck.rolls }, () => randomRoll(rand)) } : null;
+      // as in the page: the re-check over all 220 rolls before Round 8 (recheck.all), else a sample
+      const sample = Array.from({ length: recheck ? recheck.rolls : 0 }, () => randomRoll(rand));
+      const rc = recheck && recheck.top > 1 ? { top: recheck.top, rolls: recheck.all && k >= 4 ? 'all' : sample } : null;
+      pl.margins = margins === false ? {} : null;   // false: no tie margins (as before)
       res = pl.chooseBooking(st, cat, bankList, k, rc);
     } else {
       const bank = new Int8Array(10); for (const b of bankList) if (!b.used) bank[b.digit]++;
@@ -191,7 +231,7 @@ function evalGame(rolls, classic, policy, model, modelId, catRolls, recheck) {
 }
 
 function handle(msg) {
-  if (msg.type === 'evalGame') return evalGame(msg.rolls, msg.classic, msg.policy, msg.model, msg.modelId, msg.catRolls, msg.recheck);
+  if (msg.type === 'evalGame') return evalGame(msg.rolls, msg.classic, msg.policy, msg.model, msg.modelId, msg.catRolls, msg.recheck, msg.margins);
   if (msg.type === 'games') {
     const rand = mulberry(msg.seed);
     const res = [];
@@ -212,4 +252,4 @@ function handle(msg) {
   throw new Error('unknown job ' + msg.type);
 }
 
-module.exports = { handle, playGame, label, options, exactValue2, evalGame };
+module.exports = { explored, handle, playGame, label, options, exactValue2, evalGame };

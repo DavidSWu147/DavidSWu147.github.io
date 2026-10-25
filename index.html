@@ -348,733 +348,302 @@ function generateDistinctRolls() {
 }
 const DISTINCT_ROLLS = generateDistinctRolls();
 
-// Optimized solver using abstract row-level moves.
-// Move types:
-//   'concrete':   specific digit cost array (sequence rows, partial ladder/matching)
-//   'matchAny':   needs N copies of ANY single digit (empty matching rows)
-//   'matchFixed': needs N copies of a SPECIFIC digit (partial matching rows)
-//   'ladderAny':  needs 2+2 of any adjacent pair (empty ladder rows)
-
-function getSequenceRowMovesOpt(row) {
-  const currentScore = scoreSequenceRow(row);
-  if (currentScore >= 15) return [];
-  const emptyCount = row.filter(c => c === null).length;
-  if (emptyCount === 0) return [];
-  const moves = [];
-  const seen = new Set();
-  for (let startDigit = 0; startDigit <= 9; startDigit++) {
-    for (const dir of [1, -1]) {
-      for (const targetLen of [3, 4]) {
-        if (targetLen === 3 && currentScore >= 10) continue;
-        if (targetLen === 4 && currentScore >= 15) continue;
-        const positionSets = targetLen === 4 ? [[0, 1, 2, 3]] : [[0, 1, 2], [1, 2, 3]];
-        for (const positions of positionSets) {
-          const targetDigits = positions.map(p => dir === 1 ? (startDigit + p) % 10 : (startDigit - p + 10) % 10);
-          let compatible = true;
-          const toPlace = [];
-          for (let i = 0; i < positions.length; i++) {
-            const pos = positions[i];
-            const needed = targetDigits[i];
-            if (row[pos] !== null) {
-              if (row[pos] !== needed) {
-                compatible = false;
-                break;
-              }
-            } else {
-              toPlace.push({
-                pos,
-                digit: needed
-              });
-            }
-          }
-          if (!compatible || toPlace.length === 0) continue;
-          const testRow = [...row];
-          for (const {
-            pos,
-            digit
-          } of toPlace) testRow[pos] = digit;
-          const newScore = scoreSequenceRow(testRow);
-          if (newScore <= currentScore) continue;
-          const cost = Array(10).fill(0);
-          for (const {
-            digit
-          } of toPlace) cost[digit]++;
-          const key = `${newScore - currentScore}|${cost.join(',')}|${toPlace.length}|${newScore === 15}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          moves.push({
-            type: 'concrete',
-            scoreGain: newScore - currentScore,
-            digitCost: cost,
-            slots: toPlace.length,
-            makes4Seq: newScore === 15,
-            makes3PlusSeq: currentScore < 10 && newScore >= 10
-          });
-        }
-      }
+// --- Round 10 win chances, standalone (no ai/simili-solver.js needed) ---
+// Exact: a roll wins if some legal booking of the round reaches 100 (with Bonus III).
+// Used when ai/simili-solver.js is missing, and by ai/test as an independent check of
+// the solver. Built only from the game's own row rules (canExtendSequence,
+// isValidLadderPlacement, scoreRow) and bonus rules:
+//  - up to maxBook main books (3, or 4 in Sequence with Bonus I), all in the chosen category;
+//  - each free book (II-A, and II-B in Modern) can be used once, as soon as its bonus is
+//    unlocked on the board at that moment, including by bookings made earlier in this
+//    round (5 Sequence rows of 10+ for II-A, 4 of 15 for II-B), anywhere, except that if
+//    the other free book went outside Sequence, this one must go into Sequence.
+// How: every way to raise each row's score (all fillings of its empty cells checked with
+// the row rules), then a search over one way per row within the digits and books
+// available. A combination that reaches 100 counts if its bookings can be made in some
+// legal order: main books first (they never wait for anything; an earlier booking can
+// only unlock more), then the free books one at a time, trying every choice of which
+// digits are the free ones, their order and which bonus each uses.
+const R10_CATS = ['sequence', 'matching', 'ladder'];
+function r10RowLegal(cat, row) {
+  if (cat === 'sequence') {
+    const ex = [];
+    for (let i = 0; i < 4; i++) if (row[i] !== null) {
+      if (!canExtendSequence(ex, row[i], i)) return false;
+      ex.push({
+        digit: row[i],
+        pos: i
+      });
     }
+    return true;
   }
-  return moves;
+  if (cat === 'matching') {
+    const f = row.filter(x => x !== null);
+    return f.every(d => d === f[0]);
+  }
+  return isValidLadderPlacement(row);
 }
-function getMatchingRowMovesOpt(row, laxPlacement) {
-  const currentScore = scoreMatchingRow(row, laxPlacement);
-  if (currentScore >= 20) return [];
-  const filled = row.filter(c => c !== null);
-  const emptyCount = ROW_SIZE - filled.length;
-  if (emptyCount === 0) return [];
-  const moves = [];
-  if (filled.length > 0) {
-    const targetD = filled[0];
-    for (let add = 1; add <= emptyCount; add++) {
-      if (laxPlacement) {
-        const newFilled = filled.length + add;
-        const newScore = newFilled >= 4 ? 20 : newFilled >= 3 ? 15 : 0;
-        if (newScore > currentScore) {
-          moves.push({
-            type: 'matchFixed',
-            scoreGain: newScore - currentScore,
-            digit: targetD,
-            count: add,
-            slots: add,
-            makes4Seq: false,
-            makes3PlusSeq: false
+// Every way to raise the score of one row by filling some of its empty cells, once per
+// equivalent way: { cat, row, digits (sorted), cost[10], n, score, partial }
+// (partial[mask], Sequence only: the row's score without the added digits in `mask`).
+function r10RowOptions(cat, rowIdx, row) {
+  const base = scoreRow(cat, row, false);
+  const empty = [];
+  for (let i = 0; i < 4; i++) if (row[i] === null) empty.push(i);
+  const out = new Map();
+  const cur = [...row];
+  const add = [];
+  const visit = j => {
+    if (j === empty.length) {
+      if (!add.length) return;
+      if (!r10RowLegal(cat, cur)) return;
+      const score = scoreRow(cat, cur, false);
+      if (score <= base) return;
+      const placed = add.slice().sort((a, b) => a.digit - b.digit || a.col - b.col);
+      let partial = null;
+      if (cat === 'sequence') {
+        partial = [];
+        for (let mask = 0; mask < 1 << placed.length; mask++) {
+          const r = [...cur];
+          placed.forEach((p, k) => {
+            if (mask & 1 << k) r[p.col] = null;
           });
-        }
-      } else {
-        const emptyPos = [];
-        for (let i = 0; i < ROW_SIZE; i++) if (row[i] === null) emptyPos.push(i);
-        let bestScore = 0;
-        for (let mask = 0; mask < 1 << emptyPos.length; mask++) {
-          let bits = 0;
-          for (let i = 0; i < emptyPos.length; i++) if (mask & 1 << i) bits++;
-          if (bits !== add) continue;
-          const tr = [...row];
-          for (let i = 0; i < emptyPos.length; i++) if (mask & 1 << i) tr[emptyPos[i]] = targetD;
-          const s = scoreMatchingRow(tr, false);
-          if (s > bestScore) bestScore = s;
-          if (bestScore >= 20) break;
-        }
-        if (bestScore > currentScore) {
-          moves.push({
-            type: 'matchFixed',
-            scoreGain: bestScore - currentScore,
-            digit: targetD,
-            count: add,
-            slots: add,
-            makes4Seq: false,
-            makes3PlusSeq: false
-          });
+          partial.push(scoreSequenceRow(r));
         }
       }
-    }
-  } else {
-    // Empty row — any digit works
-    moves.push({
-      type: 'matchAny',
-      scoreGain: 15,
-      count: 3,
-      slots: 3,
-      makes4Seq: false,
-      makes3PlusSeq: false
-    });
-    moves.push({
-      type: 'matchAny',
-      scoreGain: 20,
-      count: 4,
-      slots: 4,
-      makes4Seq: false,
-      makes3PlusSeq: false
-    });
-  }
-  return moves;
-}
-function getLadderRowMovesOpt(row, laxPlacement) {
-  const currentScore = scoreLadderRow(row, laxPlacement);
-  if (currentScore >= 20) return [];
-  const emptyPos = [];
-  for (let i = 0; i < ROW_SIZE; i++) if (row[i] === null) emptyPos.push(i);
-  if (emptyPos.length === 0) return [];
-  const filled = row.filter(c => c !== null);
-  if (filled.length === 0) {
-    return [{
-      type: 'ladderAny',
-      scoreGain: 20,
-      slots: 4,
-      makes4Seq: false,
-      makes3PlusSeq: false
-    }];
-  }
-
-  // Partially filled — enumerate specific digit costs
-  const moves = [];
-  const seen = new Set();
-  for (let x = 0; x <= 9; x++) {
-    for (const y of [(x + 1) % 10, (x - 1 + 10) % 10]) {
-      if (y === x) continue;
-      let arrangements;
-      if (laxPlacement) {
-        arrangements = [[x, x, y, y], [x, y, x, y], [x, y, y, x], [y, x, x, y], [y, x, y, x], [y, y, x, x]];
-      } else {
-        arrangements = [[x, x, y, y]];
-      }
-      for (const target of arrangements) {
-        let compatible = true;
-        const cost = Array(10).fill(0);
-        let slots = 0;
-        for (let i = 0; i < ROW_SIZE; i++) {
-          if (row[i] !== null) {
-            if (row[i] !== target[i]) {
-              compatible = false;
-              break;
-            }
-          } else {
-            cost[target[i]]++;
-            slots++;
-          }
-        }
-        if (!compatible || slots === 0) continue;
-        const newScore = scoreLadderRow(target, laxPlacement);
-        if (newScore <= currentScore) continue;
-        const key = `${cost.join(',')}|${slots}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        moves.push({
-          type: 'concrete',
-          scoreGain: newScore - currentScore,
-          digitCost: cost,
-          slots,
-          makes4Seq: false,
-          makes3PlusSeq: false
-        });
-      }
-    }
-  }
-  return moves;
-}
-function buildRowMovesOpt(grids, laxPlacement) {
-  const rowMoves = [];
-  for (const cat of ['sequence', 'matching', 'ladder']) {
-    for (let rowIdx = 0; rowIdx < MAX_ROWS; rowIdx++) {
-      const row = grids[cat][rowIdx];
-      let options;
-      if (cat === 'sequence') options = getSequenceRowMovesOpt(row);else if (cat === 'matching') options = getMatchingRowMovesOpt(row, laxPlacement);else options = getLadderRowMovesOpt(row, laxPlacement);
-      if (options.length > 0) {
-        // Sort options: highest scoreGain/slots ratio first (best value first)
-        options.sort((a, b) => b.scoreGain / b.slots - a.scoreGain / a.slots || a.slots - b.slots);
-        rowMoves.push({
+      const digits = placed.map(p => p.digit);
+      const key = digits.join('') + '|' + score + '|' + (partial ? partial.join(',') : '');
+      if (!out.has(key)) {
+        const cost = new Array(10).fill(0);
+        for (const d of digits) cost[d]++;
+        out.set(key, {
           cat,
-          rowIdx,
-          options
+          row: rowIdx,
+          digits,
+          cost,
+          n: digits.length,
+          score,
+          gain: score - base,
+          partial
         });
       }
+      return;
     }
-  }
-  // Sort rows: fewest options first (constrains search), then by best score gain descending
-  rowMoves.sort((a, b) => {
-    const aMax = Math.max(...a.options.map(o => o.scoreGain));
-    const bMax = Math.max(...b.options.map(o => o.scoreGain));
-    return a.options.length - b.options.length || bMax - aMax;
-  });
-  return rowMoves;
+    visit(j + 1);
+    for (let d = 0; d <= 9; d++) {
+      cur[empty[j]] = d;
+      add.push({
+        col: empty[j],
+        digit: d
+      });
+      visit(j + 1);
+      add.pop();
+      cur[empty[j]] = null;
+    }
+  };
+  visit(0);
+  return [...out.values()];
 }
-
-// Adjacent pairs for ladderAny: (0,1),(1,2),...,(9,0)
-const ADJACENT_PAIRS = [];
-for (let x = 0; x <= 9; x++) ADJACENT_PAIRS.push([x, (x + 1) % 10]);
-function canReach100(grids, unusedDigits, category, maxBook, bonusBooks, bonusConstraints, classicMode, laxPlacement, seqBonusIIAUnlocked, seqBonusIIBUnlocked, precomputedRowMoves) {
-  const baseScore = totalScore(grids, laxPlacement);
-  const baseBonusIII = classicMode ? hasSequenceBonusIII(grids) : hasModernBonusIII(grids, laxPlacement);
-  if (baseScore + (baseBonusIII ? 5 : 0) >= 100) return true;
-  const totalSlots = maxBook + bonusBooks;
-  if (totalSlots === 0 || unusedDigits.length === 0) return false;
-  const ctx = buildSearchContext(grids, category, maxBook, bonusBooks, bonusConstraints, classicMode, laxPlacement, seqBonusIIAUnlocked, seqBonusIIBUnlocked, precomputedRowMoves);
-  return runSearch(ctx, unusedDigits);
-}
-
-// Build all the invariant data needed for the search — can be reused across rolls
-function buildSearchContext(grids, category, maxBook, bonusBooks, bonusConstraints, classicMode, laxPlacement, seqBonusIIAUnlocked, seqBonusIIBUnlocked, rowMoves) {
-  const baseScore = totalScore(grids, laxPlacement);
-  const baseBonusIII = classicMode ? hasSequenceBonusIII(grids) : hasModernBonusIII(grids, laxPlacement);
-  const neededScore = 100 - baseScore;
-  const baseSeq3Count = countCompletedSequences3(grids);
-  const baseSeq4Count = countCompletedSequences4(grids);
-  const baseMatchAll20 = grids.matching.every(row => scoreMatchingRow(row, laxPlacement) >= 20);
-  const baseLadderAll20 = grids.ladder.every(row => scoreLadderRow(row, laxPlacement) >= 20);
-  // When dynamic bonus unlocks are possible (II-A or II-B not yet unlocked),
-  // chosen-category rows must be processed before non-chosen rows. This ensures
-  // that sequence completions (which trigger unlocks) happen before the search
-  // tries to use bonus books on non-chosen rows. Within each group, preserve
-  // the existing sort order (fewest options first, best score gain).
-  const needsUnlockSort = !seqBonusIIAUnlocked || !classicMode && !seqBonusIIBUnlocked;
-  if (needsUnlockSort) {
-    // Stable sort: chosen-category rows first, then non-chosen
-    const indexed = rowMoves.map((rm, i) => ({
-      rm,
-      origIdx: i
-    }));
-    indexed.sort((a, b) => {
-      const aChosen = a.rm.cat === category ? 0 : 1;
-      const bChosen = b.rm.cat === category ? 0 : 1;
-      if (aChosen !== bChosen) return aChosen - bChosen;
-      return a.origIdx - b.origIdx; // preserve original sort within group
-    });
-    rowMoves = indexed.map(x => x.rm);
-  }
-  const nRows = rowMoves.length;
-  const matchingNot20 = [];
-  const ladderNot20 = [];
-  for (let i = 0; i < MAX_ROWS; i++) {
-    if (scoreMatchingRow(grids.matching[i], laxPlacement) < 20) matchingNot20.push(i);
-    if (scoreLadderRow(grids.ladder[i], laxPlacement) < 20) ladderNot20.push(i);
-  }
-  const suffixMax = new Int16Array(nRows + 1);
-  for (let i = nRows - 1; i >= 0; i--) {
-    let bestGain = 0;
-    for (const opt of rowMoves[i].options) if (opt.scoreGain > bestGain) bestGain = opt.scoreGain;
-    suffixMax[i] = suffixMax[i + 1] + bestGain;
-  }
-  const rowMinSlots = new Array(nRows);
-  for (let i = 0; i < nRows; i++) {
-    let minS = Infinity;
-    for (const opt of rowMoves[i].options) if (opt.slots < minS) minS = opt.slots;
-    rowMinSlots[i] = minS;
-  }
-  const rowMatchNot20Idx = new Array(nRows).fill(-1);
-  const rowLadderNot20Idx = new Array(nRows).fill(-1);
-  const rowScoreFor20 = new Array(nRows).fill(0);
-  const rowCat = new Array(nRows);
-  for (let i = 0; i < nRows; i++) {
-    const {
+// Everything about one position that does not depend on the roll or the category.
+function r10Prepare(ps, classicMode) {
+  const grids = ps.grids;
+  const rows = [];
+  for (const cat of R10_CATS) for (let i = 0; i < MAX_ROWS; i++) {
+    const options = r10RowOptions(cat, i, grids[cat][i]);
+    rows.push({
       cat,
-      rowIdx
-    } = rowMoves[i];
-    rowCat[i] = cat;
-    if (cat === 'matching' && matchingNot20.includes(rowIdx)) {
-      rowMatchNot20Idx[i] = rowIdx;
-      rowScoreFor20[i] = 20 - scoreMatchingRow(grids.matching[rowIdx], laxPlacement);
-    }
-    if (cat === 'ladder' && ladderNot20.includes(rowIdx)) {
-      rowLadderNot20Idx[i] = rowIdx;
-      rowScoreFor20[i] = 20 - scoreLadderRow(grids.ladder[rowIdx], laxPlacement);
-    }
+      row: i,
+      base: scoreRow(cat, grids[cat][i], false),
+      options
+    });
   }
-
-  // The at-least-one-Sequence constraint only applies in Modern when 2+ total bonus books
-  // could be used (pre-existing + dynamically unlocked).
-  const canHaveMultipleBonus = !classicMode && (bonusBooks >= 2 || bonusBooks >= 1 && (!seqBonusIIAUnlocked || !seqBonusIIBUnlocked) || !seqBonusIIAUnlocked && !seqBonusIIBUnlocked);
-
-  // Precompute 1-slot upgrade options per row for deferred bonus book usage.
-  // When a bonus book is dynamically unlocked (II-A/II-B) during the search,
-  // it might be best used on a row that was already processed and skipped.
-  // These arrays let us check that at terminal nodes without re-traversing.
-  const oneSlotUpgrades = [];
-  for (let i = 0; i < nRows; i++) {
-    const ups = [];
-    for (const opt of rowMoves[i].options) {
-      if (opt.slots === 1) {
-        ups.push(opt);
-      }
-    }
-    oneSlotUpgrades.push(ups);
-  }
+  const used = (u, c) => !u ? 0 : c === '?' ? 2 : 1; // 0 unused, 1 used in Sequence, 2 used elsewhere
   return {
-    neededScore,
-    baseBonusIII,
-    baseSeq3Count,
-    baseSeq4Count,
-    baseMatchAll20,
-    baseLadderAll20,
-    matchingNot20,
-    ladderNot20,
-    rowMoves,
-    nRows,
-    suffixMax,
-    rowMinSlots,
-    rowMatchNot20Idx,
-    rowLadderNot20Idx,
-    rowScoreFor20,
-    rowCat,
-    category,
-    maxBook,
-    bonusBooks,
-    bonusConstraints,
+    grids,
     classicMode,
-    seqBonusIIAUnlocked,
-    seqBonusIIBUnlocked,
-    canHaveMultipleBonus,
-    oneSlotUpgrades,
-    alreadyWon: baseBonusIII && neededScore <= 5
+    rows,
+    baseScore: totalScore(grids, false),
+    bonusI: hasSequenceBonusI(grids),
+    uA: used(ps.seqBonusIIAUsed, ps.seqBonusIIACategory),
+    uB: classicMode ? 1 : used(ps.seqBonusIIBUsed, ps.seqBonusIIBCategory),
+    unlockedA: !!ps.seqBonusIIAUnlocked,
+    unlockedB: !classicMode && !!ps.seqBonusIIBUnlocked
   };
 }
-
-// Run the search with a specific digit pool
-function runSearch(ctx, unusedDigits) {
-  if (ctx.alreadyWon) return true;
-  if (ctx.neededScore > ctx.suffixMax[0] + 5) return false;
-  const {
-    neededScore,
-    baseBonusIII,
-    baseSeq3Count,
-    baseSeq4Count,
-    baseMatchAll20,
-    baseLadderAll20,
-    matchingNot20,
-    ladderNot20,
-    rowMoves,
-    nRows,
-    suffixMax,
-    rowMinSlots,
-    rowMatchNot20Idx,
-    rowLadderNot20Idx,
-    rowScoreFor20,
-    rowCat,
-    category,
-    maxBook,
-    bonusBooks,
-    bonusConstraints,
-    classicMode,
-    seqBonusIIAUnlocked,
-    seqBonusIIBUnlocked,
-    canHaveMultipleBonus,
-    oneSlotUpgrades
-  } = ctx;
-  let found = false;
-  const pool = new Int8Array(10);
-  for (const d of unusedDigits) pool[d]++;
-  const rowUsed = new Uint8Array(nRows); // track which rows have placements
-
-  function tryApply(opt, idx, mainUsed, bonusUsed, scoreGain, n4s, n3ps, mN, lN, isChosenCat, bonusSeqUsed) {
-    let newMain, newBonus;
-    if (isChosenCat) {
-      const mainAvail = maxBook - mainUsed;
-      const mainSlots = Math.min(opt.slots, mainAvail);
-      const bonusSlots = opt.slots - mainSlots;
-      newMain = mainUsed + mainSlots;
-      newBonus = bonusUsed + bonusSlots;
-    } else {
-      newMain = mainUsed;
-      newBonus = bonusUsed + opt.slots;
+// Can this choice of row options (`pick`, one per row at most) be booked legally?
+function r10Feasible(P, pick, category, maxBook) {
+  const all = [];
+  pick.forEach((o, oi) => o.digits.forEach((d, k) => all.push({
+    oi,
+    k,
+    inCat: o.cat === category,
+    seq: o.cat === 'sequence'
+  })));
+  const nIn = all.filter(x => x.inCat).length,
+    nOut = all.length - nIn;
+  const free = nOut + Math.max(0, nIn - maxBook);
+  if (free === 0) return true;
+  const letters = [];
+  if (P.uA === 0) letters.push('A');
+  if (P.uB === 0) letters.push('B');
+  if (free > letters.length) return false;
+  const outside = all.filter(x => !x.inCat),
+    inside = all.filter(x => x.inCat);
+  // Sequence rows' scores with the given digits left out: how many score 10+ and 15
+  const counts = removed => {
+    let c10 = 0,
+      c15 = 0;
+    for (const r of P.rows) {
+      if (r.cat !== 'sequence') continue;
+      const oi = pick.findIndex(o => o.cat === 'sequence' && o.row === r.row);
+      let s = r.base;
+      if (oi >= 0) {
+        let mask = 0;
+        for (const x of removed) if (x.oi === oi) mask |= 1 << x.k;
+        s = pick[oi].partial[mask];
+      }
+      if (s >= 10) c10++;
+      if (s >= 15) c15++;
     }
-    const newScore = scoreGain + opt.scoreGain;
-    const bonusSlotsOnSeq = rowCat[idx] === 'sequence' ? isChosenCat ? opt.slots - Math.min(opt.slots, maxBook - mainUsed) : opt.slots : 0;
-    const newBonusSeq = bonusSeqUsed + (bonusSlotsOnSeq > 0 ? bonusSlotsOnSeq : 0);
-    rowUsed[idx] = 1;
-    if (opt.type === 'concrete') {
-      const dc = opt.digitCost;
-      for (let d = 0; d <= 9; d++) if (dc[d] > pool[d]) {
-        rowUsed[idx] = 0;
-        return;
-      }
-      for (let d = 0; d <= 9; d++) pool[d] -= dc[d];
-      search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
-      for (let d = 0; d <= 9; d++) pool[d] += dc[d];
-    } else if (opt.type === 'matchFixed') {
-      if (pool[opt.digit] < opt.count) {
-        rowUsed[idx] = 0;
-        return;
-      }
-      pool[opt.digit] -= opt.count;
-      search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
-      pool[opt.digit] += opt.count;
-    } else if (opt.type === 'matchAny') {
-      for (let d = 0; d <= 9; d++) {
-        if (found) break;
-        if (pool[d] >= opt.count) {
-          pool[d] -= opt.count;
-          search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
-          pool[d] += opt.count;
-        }
-      }
-    } else if (opt.type === 'ladderAny') {
-      for (let p = 0; p < 10; p++) {
-        if (found) break;
-        const y = (p + 1) % 10;
-        if (pool[p] >= 2 && pool[y] >= 2) {
-          pool[p] -= 2;
-          pool[y] -= 2;
-          search(idx + 1, newMain, newBonus, newScore, n4s, n3ps, mN, lN, newBonusSeq);
-          pool[p] += 2;
-          pool[y] += 2;
-        }
-      }
-    }
-    rowUsed[idx] = 0;
-  }
-  function search(idx, mainUsed, bonusUsed, scoreGain, new4Seq, new3PlusSeq, mNot20, lNot20, bonusSeqUsed) {
-    if (found) return;
-    let bonusIII = baseBonusIII;
-    if (!bonusIII) {
-      if (classicMode) {
-        bonusIII = baseSeq4Count + new4Seq >= 5;
-      } else {
-        bonusIII = baseSeq4Count + new4Seq >= 5 || mNot20 === 0 && matchingNot20.length > 0 || lNot20 === 0 && ladderNot20.length > 0 || baseMatchAll20 || baseLadderAll20;
-      }
-    }
-    const effectiveScore = scoreGain + (bonusIII ? 5 : 0);
-    if (effectiveScore >= neededScore) {
-      // In Modern, if 2+ bonus books were used, at least one must be for Sequence
-      if (canHaveMultipleBonus && bonusUsed >= 2 && bonusSeqUsed === 0) return;
-      found = true;
-      return;
-    }
-    if (idx >= nRows) {
-      // Check if dynamically-unlocked bonus books remain that could be used
-      // on previously-skipped rows (the search processes rows sequentially and
-      // can't revisit them, but in reality bonus books can go to any row).
-      let effectiveBonusMax = bonusBooks;
-      if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + new3PlusSeq >= 5) {
-        if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
-      }
-      if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + new4Seq >= 4) {
-        if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
-      }
-      const remainingBonus = effectiveBonusMax - bonusUsed;
-      if (remainingBonus > 0) {
-        // Collect all feasible 1-slot upgrades on unused rows, sorted by score gain desc.
-        // Since remainingBonus is at most 2, we just need the top 1 or 2 upgrades.
-        const feasibleUpgrades = [];
-        for (let ri = 0; ri < nRows; ri++) {
-          if (rowUsed[ri]) continue;
-          const ups = oneSlotUpgrades[ri];
-          for (let ui = 0; ui < ups.length; ui++) {
-            const up = ups[ui];
-            let feasible = true;
-            if (up.type === 'concrete') {
-              const dc = up.digitCost;
-              for (let d = 0; d <= 9; d++) if (dc[d] > pool[d]) {
-                feasible = false;
-                break;
-              }
-            } else if (up.type === 'matchFixed') {
-              if (pool[up.digit] < up.count) feasible = false;
-            }
-            if (feasible) {
-              feasibleUpgrades.push({
-                scoreGain: up.scoreGain,
-                isSeq: rowCat[ri] === 'sequence',
-                ri,
-                up
-              });
-            }
-          }
-        }
-        if (feasibleUpgrades.length > 0) {
-          // Sort by score gain descending
-          feasibleUpgrades.sort((a, b) => b.scoreGain - a.scoreGain);
-          // Try using up to remainingBonus upgrades (greedily pick best)
-          // For 1 remaining bonus: just take the best
-          // For 2 remaining bonuses: take the best two (if they don't conflict on digits/rows)
-          // Since this is rare (at most 2), just try combinations
-          if (remainingBonus === 1) {
-            const best = feasibleUpgrades[0];
-            const newEffective = effectiveScore + best.scoreGain;
-            if (newEffective >= neededScore) {
-              const newBonusUsed = bonusUsed + 1;
-              const newBonusSeq = bonusSeqUsed + (best.isSeq ? 1 : 0);
-              if (!canHaveMultipleBonus || newBonusUsed < 2 || newBonusSeq > 0) {
-                found = true;
-              }
-            }
-          } else {
-            // remainingBonus >= 2: try best single, then best pair
-            const best = feasibleUpgrades[0];
-            const singleEffective = effectiveScore + best.scoreGain;
-            if (singleEffective >= neededScore) {
-              const newBonusUsed = bonusUsed + 1;
-              const newBonusSeq = bonusSeqUsed + (best.isSeq ? 1 : 0);
-              if (!canHaveMultipleBonus || newBonusUsed < 2 || newBonusSeq > 0) {
-                found = true;
-              }
-            }
-            if (!found) {
-              // Try pairs from different rows
-              for (let i = 0; i < feasibleUpgrades.length && !found; i++) {
-                for (let j = i + 1; j < feasibleUpgrades.length && !found; j++) {
-                  const a = feasibleUpgrades[i],
-                    b = feasibleUpgrades[j];
-                  if (a.ri === b.ri) continue; // same row, can't upgrade twice
-                  // Check combined digit feasibility
-                  let combinedOk = true;
-                  if (a.up.type === 'concrete' && b.up.type === 'concrete') {
-                    for (let d = 0; d <= 9; d++) {
-                      if ((a.up.digitCost[d] || 0) + (b.up.digitCost[d] || 0) > pool[d]) {
-                        combinedOk = false;
-                        break;
-                      }
-                    }
-                  } else if (a.up.type === 'matchFixed' && b.up.type === 'matchFixed') {
-                    if (a.up.digit === b.up.digit) {
-                      if (a.up.count + b.up.count > pool[a.up.digit]) combinedOk = false;
-                    } else {
-                      if (pool[a.up.digit] < a.up.count || pool[b.up.digit] < b.up.count) combinedOk = false;
-                    }
-                  } else {
-                    // Mixed types - check each independently (conservative: may rarely double-count a digit)
-                    // Since these are 1-slot ops consuming 1 digit each, conflict is rare
-                  }
-                  if (combinedOk) {
-                    const pairEffective = effectiveScore + a.scoreGain + b.scoreGain;
-                    if (pairEffective >= neededScore) {
-                      const newBonusUsed = bonusUsed + 2;
-                      const newBonusSeq = bonusSeqUsed + (a.isSeq ? 1 : 0) + (b.isSeq ? 1 : 0);
-                      if (!canHaveMultipleBonus || newBonusUsed < 2 || newBonusSeq > 0) {
-                        found = true;
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-      return;
-    }
-    if (effectiveScore + suffixMax[idx] + 5 < neededScore) return;
-
-    // Skip this row
-    search(idx + 1, mainUsed, bonusUsed, scoreGain, new4Seq, new3PlusSeq, mNot20, lNot20, bonusSeqUsed);
-    if (found) return;
-    const {
-      cat,
-      options
-    } = rowMoves[idx];
-    const isChosenCat = cat === category;
-    const mainRem = maxBook - mainUsed;
-    const bonusRem = bonusBooks - bonusUsed;
-    // For chosen-cat rows, can also use bonus books if dynamically unlocked
-    // Use bonusBooks (base) + up to 2 possible unlocks as upper bound
-    if (isChosenCat && rowMinSlots[idx] > mainRem + Math.max(0, bonusBooks + 2 - bonusUsed)) return;
-    if (!isChosenCat && rowMinSlots[idx] > bonusRem + 2) return;
-    for (let oi = 0; oi < options.length; oi++) {
-      if (found) return;
-      const opt = options[oi];
-      const n4s = new4Seq + (opt.makes4Seq ? 1 : 0);
-      const n3ps = new3PlusSeq + (opt.makes3PlusSeq ? 1 : 0);
-
-      // Compute effective bonus books available (including dynamic unlocks)
-      // IMPORTANT: Use counts BEFORE current row's contribution to avoid circular dependency
-      // (can't use a bonus book unlocked by the very row being placed)
-      let effectiveBonusMax = bonusBooks;
-      if (!seqBonusIIAUnlocked && baseSeq3Count < 5 && baseSeq3Count + new3PlusSeq >= 5) {
-        if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
-      }
-      if (!classicMode && !seqBonusIIBUnlocked && baseSeq4Count < 4 && baseSeq4Count + new4Seq >= 4) {
-        if (category === 'sequence' || bonusBooks >= 1) effectiveBonusMax++;
-      }
-      if (isChosenCat) {
-        // Chosen category: use main slots first, overflow to bonus books
-        const slotsNeeded = opt.slots;
-        const mainAvail = maxBook - mainUsed;
-        if (slotsNeeded <= mainAvail) {
-          // Fits in main slots, no bonus needed
-        } else {
-          // Need some bonus book slots for the overflow
-          const bonusNeeded = slotsNeeded - mainAvail;
-          if (mainAvail < 0) continue; // already over main limit
-          const newBonusUsed = bonusUsed + bonusNeeded;
-          if (newBonusUsed > effectiveBonusMax) continue;
-        }
-      } else {
-        const newBonusUsed = bonusUsed + opt.slots;
-        if (newBonusUsed > effectiveBonusMax) continue;
-
-        // Per-slot constraint check (for pre-existing constraints from prior rounds)
-        let constraintOk = true;
-        for (let s = bonusUsed; s < newBonusUsed; s++) {
-          const constraint = s < bonusConstraints.length ? bonusConstraints[s] : 'any';
-          if (constraint === 'sequence' && cat !== 'sequence') {
-            constraintOk = false;
+    return {
+      c10,
+      c15
+    };
+  };
+  const unlocked = (L, c) => L === 'A' ? P.unlockedA || c.c10 >= 5 : P.unlockedB || c.c15 >= 4;
+  const usedOf = L => L === 'A' ? P.uA : P.uB;
+  // which of the chosen category's digits overflow into free books
+  const extra = free - nOut;
+  const choices = [];
+  if (extra === 0) choices.push([]);else if (extra === 1) inside.forEach(x => choices.push([x]));else for (let i = 0; i < inside.length; i++) for (let j = i + 1; j < inside.length; j++) choices.push([inside[i], inside[j]]);
+  for (const ch of choices) {
+    const F = outside.concat(ch);
+    const orders = F.length === 1 ? [F] : [F, [F[1], F[0]]];
+    for (const ord of orders) {
+      const lettersOrders = ord.length === 1 ? letters.map(L => [L]) : [['A', 'B'], ['B', 'A']];
+      for (const ls of lettersOrders) {
+        let ok = true,
+          pending = ord.slice();
+        const firstOutside = [];
+        for (let s = 0; s < ord.length && ok; s++) {
+          const L = ls[s],
+            x = ord[s];
+          const c = counts(pending); // the board before this free book
+          if (!unlocked(L, c)) {
+            ok = false;
             break;
           }
+          // the other free book went (earlier, or this round) outside Sequence: this one into Sequence
+          const other = L === 'A' ? 'B' : 'A';
+          const otherOut = (P.classicMode ? false : usedOf(other) === 2) || firstOutside.length > 0;
+          if (otherOut && !x.seq) {
+            ok = false;
+            break;
+          }
+          if (!x.seq) firstOutside.push(x);
+          pending = pending.filter(y => y !== x);
         }
-        if (!constraintOk) continue;
-
-        // Prospective pruning: if using 2+ bonuses, all non-Sequence so far,
-        // and no more bonus slots available after this, the constraint would fail
-        if (canHaveMultipleBonus && cat !== 'sequence' && newBonusUsed >= 2 && bonusSeqUsed === 0 && newBonusUsed >= effectiveBonusMax) {
-          continue;
-        }
+        if (ok) return true;
       }
-      let mN = mNot20;
-      let lN = lNot20;
-      if (rowMatchNot20Idx[idx] >= 0 && opt.scoreGain >= rowScoreFor20[idx]) mN--;
-      if (rowLadderNot20Idx[idx] >= 0 && opt.scoreGain >= rowScoreFor20[idx]) lN--;
-      tryApply(opt, idx, mainUsed, bonusUsed, scoreGain, n4s, n3ps, mN, lN, isChosenCat, bonusSeqUsed);
     }
   }
-  search(0, 0, 0, 0, 0, 0, matchingNot20.length, ladderNot20.length, 0);
-  return found;
+  return false;
 }
-
-// Compute win chances for all 3 categories for a player
-// Legacy round-10 calculator. Not exact (see ai/README.md); kept as a fallback for
-// when ai/simili-solver.js is missing, and as an independent check in ai/test.
-function computeRound10WinChancesLegacy(ps, existingBankDigits, classicMode, laxPlacement) {
-  const results = {};
-  const allRowMoves = buildRowMovesOpt(ps.grids, laxPlacement);
-
-  // Precompute base bank digit counts (unused bank digits)
-  const baseBankCounts = new Int8Array(10);
-  for (let i = 0; i < ps.bankUsed.length; i++) {
-    if (!ps.bankUsed[i]) baseBankCounts[existingBankDigits[i]]++;
+// Which rolls win for one category: { weight (of 1000), rolls (sorted digit triples) }.
+function r10WinningRolls(P, bankCounts, category) {
+  const maxBook = category === 'sequence' && P.bonusI ? MAX_BOOK_SEQ_BONUS : MAX_BOOK_DEFAULT;
+  const freeMax = (P.uA === 0 ? 1 : 0) + (P.uB === 0 ? 1 : 0);
+  const budget = maxBook + freeMax;
+  const rows = P.rows.filter(r => r.options.length).sort((a, b) => a.options.length - b.options.length);
+  // best gain from rows idx.. with at most k digits (one way per row): a bound for the search
+  const best = Array.from({
+    length: rows.length + 1
+  }, () => new Array(budget + 1).fill(0));
+  for (let i = rows.length - 1; i >= 0; i--) for (let k = 0; k <= budget; k++) {
+    let b = best[i + 1][k];
+    for (const o of rows[i].options) if (o.n <= k) b = Math.max(b, o.gain + best[i + 1][k - o.n]);
+    best[i][k] = b;
   }
-
-  // Check early: already at 100+?
-  const baseScore = totalScore(ps.grids, laxPlacement);
-  const baseBonusIII = classicMode ? hasSequenceBonusIII(ps.grids) : hasModernBonusIII(ps.grids, laxPlacement);
-  const alreadyWon = baseScore + (baseBonusIII ? 5 : 0) >= 100;
-  for (const category of ['sequence', 'matching', 'ladder']) {
-    if (alreadyWon) {
-      results[category] = {
-        winPct: 100,
-        outs: computeOuts(DISTINCT_ROLLS.map(r => r.digits))
-      };
-      continue;
+  const seq15 = P.rows.filter(r => r.cat === 'sequence' && r.base >= 15).length;
+  const m20 = P.rows.filter(r => r.cat === 'matching' && r.base >= 20).length;
+  const l20 = P.rows.filter(r => r.cat === 'ladder' && r.base >= 20).length;
+  const bonusIII = (s15, m, l) => s15 >= 5 || !P.classicMode && (m >= 5 || l >= 5);
+  const out = {
+    weight: 0,
+    rolls: []
+  };
+  if (P.baseScore + (bonusIII(seq15, m20, l20) ? 5 : 0) >= 100) {
+    for (const r of DISTINCT_ROLLS) {
+      out.weight += r.weight;
+      out.rolls.push(r.digits);
     }
-    const bonusIActive = hasSequenceBonusI(ps.grids);
-    const maxBook = category === 'sequence' && bonusIActive ? MAX_BOOK_SEQ_BONUS : MAX_BOOK_DEFAULT;
-    let bonusBooks = 0;
-    const bonusConstraints = [];
-    if (ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed) {
-      bonusBooks++;
-      if (ps.seqBonusIIBUsed && ps.seqBonusIIBCategory === '?') bonusConstraints.push('sequence');else bonusConstraints.push('any');
-    }
-    if (!classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed) {
-      bonusBooks++;
-      if (ps.seqBonusIIAUsed && ps.seqBonusIIACategory === '?') bonusConstraints.push('sequence');else bonusConstraints.push('any');
-    }
-
-    // Build search context once per category (invariant across rolls)
-    const ctx = buildSearchContext(ps.grids, category, maxBook, bonusBooks, bonusConstraints, classicMode, laxPlacement, ps.seqBonusIIAUnlocked, ps.seqBonusIIBUnlocked, allRowMoves);
-    let winningRollWeight = 0;
-    const winningRolls = [];
-    for (const roll of DISTINCT_ROLLS) {
-      // Build unused digits: base bank + roll
-      const allUnused = [];
-      const tempCounts = new Int8Array(baseBankCounts);
-      for (const d of roll.digits) tempCounts[d]++;
-      for (let d = 0; d <= 9; d++) {
-        for (let c = 0; c < tempCounts[d]; c++) allUnused.push(d);
+    return out;
+  }
+  const pool = new Array(10);
+  for (const roll of DISTINCT_ROLLS) {
+    for (let d = 0; d < 10; d++) pool[d] = bankCounts[d];
+    for (const d of roll.digits) pool[d]++;
+    const pick = [];
+    let found = false;
+    const dfs = (i, nUsed, gain, s15, m, l) => {
+      if (found || i >= rows.length) return;
+      const score = P.baseScore + gain;
+      if (score + best[i][budget - nUsed] + 5 < 100) return;
+      const r = rows[i];
+      for (const o of r.options) {
+        if (found) return;
+        if (nUsed + o.n > budget) continue;
+        let ok = true;
+        for (let d = 0; d < 10; d++) if (o.cost[d] > pool[d]) {
+          ok = false;
+          break;
+        }
+        if (!ok) continue;
+        for (let d = 0; d < 10; d++) pool[d] -= o.cost[d];
+        pick.push(o);
+        const s2 = s15 + (r.cat === 'sequence' && o.score >= 15 && r.base < 15 ? 1 : 0);
+        const m2 = m + (r.cat === 'matching' && o.score >= 20 && r.base < 20 ? 1 : 0);
+        const l2 = l + (r.cat === 'ladder' && o.score >= 20 && r.base < 20 ? 1 : 0);
+        // reaches 100 and can be booked: a win. Otherwise more rows may still help (one more
+        // Sequence row can unlock the free book another row needs).
+        if (score + o.gain + (bonusIII(s2, m2, l2) ? 5 : 0) >= 100 && r10Feasible(P, pick, category, maxBook)) found = true;else dfs(i + 1, nUsed + o.n, gain + o.gain, s2, m2, l2);
+        pick.pop();
+        for (let d = 0; d < 10; d++) pool[d] += o.cost[d];
       }
-      const won = runSearch(ctx, allUnused);
-      if (won) {
-        winningRollWeight += roll.weight;
-        winningRolls.push(roll.digits);
-      }
+      dfs(i + 1, nUsed, gain, s15, m, l);
+    };
+    dfs(0, 0, 0, seq15, m20, l20);
+    if (found) {
+      out.weight += roll.weight;
+      out.rolls.push(roll.digits);
     }
+  }
+  return out;
+}
+// Same output as computeRound10WinChances: { sequence: { winPct, outs }, matching: ..., ladder: ... }.
+function computeRound10WinChancesStandalone(ps, existingBankDigits, classicMode, laxPlacement) {
+  const p = laxPlacement ? laxPlayerToStrict(ps) : ps;
+  const P = r10Prepare(p, classicMode);
+  const bankCounts = new Array(10).fill(0);
+  for (let i = 0; i < p.bankUsed.length; i++) if (!p.bankUsed[i]) bankCounts[existingBankDigits[i]]++;
+  const results = {};
+  for (const category of R10_CATS) {
+    const {
+      weight,
+      rolls
+    } = r10WinningRolls(P, bankCounts, category);
     results[category] = {
-      winPct: winningRollWeight / 10,
-      outs: computeOuts(winningRolls)
+      winPct: weight / 10,
+      outs: computeOuts(rolls)
     };
   }
   return results;
 }
 
 // Round 10 win chances from the exact solver (ai/simili-solver.js), same output as the
-// legacy calculator: { sequence: { winPct, outs }, matching: ..., ladder: ... }.
+// standalone calculator above: { sequence: { winPct, outs }, matching: ..., ladder: ... }.
 function computeRound10WinChances(ps, existingBankDigits, classicMode, laxPlacement) {
-  if (typeof SimiliSolver === 'undefined') return computeRound10WinChancesLegacy(ps, existingBankDigits, classicMode, laxPlacement);
+  if (typeof SimiliSolver === 'undefined') return computeRound10WinChancesStandalone(ps, existingBankDigits, classicMode, laxPlacement);
   const {
     state
   } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(ps) : ps, existingBankDigits);
@@ -2160,6 +1729,26 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   };
   const groups = previewMainSolver(classicMode).bookingGroups(state, cat, bankList, 3);
   const n = groups.length;
+  // Plays after which 100 is out of reach even with every digit at hand (canStillReach100 in
+  // simili-solver.js: rounds and free books cannot fill enough cells) are lost for sure. When
+  // some other play can still reach 100 they are never solved: they get a bound of 0% to win
+  // and go to the end of the order, behind a best so far, so they are skipped straight away.
+  // (If no play turns out to have a chance after all, they are solved as usual.)
+  if (typeof S.canStillReach100 === 'function') {
+    const reach = groups.map(g => S.canStillReach100(g.state.rows, g.state.usedA, g.state.usedB, 2, !!classicMode));
+    if (reach.some(x => x) && reach.some(x => !x)) groups.forEach((g, i) => {
+      if (!reach[i]) {
+        g.dead = true;
+        g.bound = {
+          ub: [0, 0, 1e6, 1e6],
+          quick: true
+        };
+        g.screen = [0, 0, 0, 0];
+        g.fine = [0, 0, 0, 0];
+      }
+    });
+  }
+  const deadLast = list => list.filter(g => !g.dead).concat(list.filter(g => g.dead));
   let phase = 0,
     nextIdx = 0,
     inFlight = 0,
@@ -2271,7 +1860,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
       const rest = order.slice(nextIdx);
       const pos = new Map(rest.map((g, i) => [g, i]));
       rest.sort((a, b) => prioRank(a) - prioRank(b) || pos.get(a) - pos.get(b));
-      order = order.slice(0, nextIdx).concat(rest);
+      order = order.slice(0, nextIdx).concat(deadLast(rest));
       order.forEach((x, j) => {
         x.oi = j;
       });
@@ -2294,6 +1883,10 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   // the next piece of work, or null if the current phase has nothing left to hand out
   const nextTask = () => {
     if (phase === 0) {
+      while (nextIdx < n && groups[nextIdx].dead) {
+        nextIdx++;
+        boundsDone++;
+      }
       if (nextIdx >= n) return null;
       const g = groups[nextIdx++];
       return {
@@ -2326,6 +1919,8 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
     }
     if (phase === 1) {
       while (nextIdx < order.length) {
+        // a certain loss waits until a best so far is back (then it is skipped below)
+        if (order[nextIdx].dead && best3 === null && inFlight > 0) return null;
         const g = order[nextIdx++];
         if (best3 !== null && cmp3(g.bound.ub, best3) < 0) {
           processed++;
@@ -2426,6 +2021,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
         const pos = new Map(order.map((g, i) => [g, i]));
         order.sort((a, b) => prioRank(a) - prioRank(b) || pos.get(a) - pos.get(b));
       }
+      order = deadLast(order);
       order.forEach((g, i) => {
         g.oi = i;
       });
@@ -2443,6 +2039,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
         const pos = new Map(order.map((g, i) => [g, i]));
         order.sort((a, b) => prioRank(a) - prioRank(b) || pos.get(a) - pos.get(b));
       }
+      order = deadLast(order);
       order.forEach((g, i) => {
         g.oi = i;
       });

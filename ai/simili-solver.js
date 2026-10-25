@@ -255,6 +255,134 @@
     if (n15 >= 5 || (!classic && (m20 === ROWS || l20 === ROWS))) s += 5;
     return s;
   }
+  // ---------- can 100 still be reached at all? ----------
+  // With k rounds to play from a round start, could the score reach 100 even if every
+  // digit were always at hand? If not, the game is lost whatever the dice do (booking
+  // nothing in rounds 1-4 in Classic, say). Optimistic on purpose, so it never calls a
+  // winnable position lost: each row needs only cells (any digits), a round gives 3 cells
+  // in its category (4 in Sequence once Bonus I is active; the first Sequence round only 3
+  // if it is not yet), each free book still to come (II-A once 5 Sequence rows score 10+,
+  // II-B in Modern once 4 score 15) one cell anywhere, at any time, and Bonus III +5.
+  // reachBest[cat][code * 5 + c]: the best score this row can reach with c more cells
+  const reachBest = [0, 1, 2].map(() => new Int8Array(NCODES * 5).fill(-1));
+  function rowReach(cat, code, c) {
+    const t = reachBest[cat], key = code * 5 + c;
+    if (t[key] >= 0) return t[key];
+    let best = SCORE[cat][code];
+    if (c > 0) {
+      const cells = dec(code);
+      for (let p = 0; p < 4; p++) {
+        if (cells[p] !== E) continue;
+        for (let d = 0; d <= 9; d++) {
+          cells[p] = d;
+          const n = enc(cells);
+          if (LEGAL[cat][n]) { const v = rowReach(cat, n, c - 1); if (v > best) best = v; }
+        }
+        cells[p] = E;
+      }
+    }
+    t[key] = best;
+    return best;
+  }
+  // best gain from one category's 5 rows with at most b cells (b <= REACH_B), by how many
+  // rows end at 10+ / 15 (Sequence) or 20 (Matching, Ladder): flags[b][x * 6 + y] ("at
+  // least x / y rows"; NEG: impossible) and plain[b] (any). Cached by the 5 rows (in any order).
+  const REACH_B = 22, NEG = -1e9;   // a category has 20 cells, + 2 free books
+  const catReachCache = new Map();
+  function categoryReach(rows, cat) {
+    const codes = [];
+    for (let i = 0; i < ROWS; i++) codes.push(rows[cat * ROWS + i]);
+    codes.sort((x, y) => x - y);
+    const key = cat + ':' + codes.join(',');
+    const hit = catReachCache.get(key);
+    if (hit) return hit;
+    let cur = [];
+    for (let b = 0; b <= REACH_B; b++) cur.push(new Float64Array(36).fill(NEG));
+    cur[0][0] = 0;
+    for (const code of codes) {
+      const base = SCORE[cat][code];
+      const opts = [];
+      for (let c = 0; c <= 4; c++) {
+        const sc = rowReach(cat, code, c);
+        opts.push({ c, gain: sc - base, x: cat === SEQ ? (sc >= 10 ? 1 : 0) : (sc >= 20 ? 1 : 0), y: cat === SEQ && sc >= 15 ? 1 : 0 });
+      }
+      const next = [];
+      for (let bb = 0; bb <= REACH_B; bb++) next.push(new Float64Array(36).fill(NEG));
+      for (let bb = 0; bb <= REACH_B; bb++) for (let st = 0; st < 36; st++) {
+        const g = cur[bb][st];
+        if (g === NEG) continue;
+        const x = Math.floor(st / 6), y = st % 6;
+        for (const o of opts) {
+          const nb = bb + o.c;
+          if (nb > REACH_B) break;
+          if (o.c > 0 && o.gain === opts[o.c - 1].gain && o.x === opts[o.c - 1].x && o.y === opts[o.c - 1].y) continue;   // a cell more for nothing
+          const ns = (x + o.x) * 6 + (y + o.y);
+          if (g + o.gain > next[nb][ns]) next[nb][ns] = g + o.gain;
+        }
+      }
+      cur = next;
+    }
+    const flags = [], plain = new Float64Array(REACH_B + 1);
+    for (let bb = 0; bb <= REACH_B; bb++) {
+      const t = new Float64Array(36).fill(NEG);
+      for (let x = 5; x >= 0; x--) for (let y = 5; y >= 0; y--) {
+        let v = Math.max(cur[bb][x * 6 + y], bb > 0 ? flags[bb - 1][x * 6 + y] : NEG);
+        if (x < 5) v = Math.max(v, t[(x + 1) * 6 + y]);
+        if (y < 5) v = Math.max(v, t[x * 6 + y + 1]);
+        t[x * 6 + y] = v;
+      }
+      flags.push(t);
+      plain[bb] = t[0];
+    }
+    const r = { flags, plain };
+    if (catReachCache.size > 100000) catReachCache.clear();
+    catReachCache.set(key, r);
+    return r;
+  }
+  const reachCache = new Map();
+  function canStillReach100(rows, usedA, usedB, k, classic) {
+    let base = 0;
+    for (let i = 0; i < 3 * ROWS; i++) base += SCORE[Math.floor(i / ROWS)][rows[i]];
+    if (base >= 100) return true;
+    let bonusI = false;
+    for (let i = 0; i < ROWS; i++) if (SCORE[SEQ][rows[i]] >= 10) bonusI = true;
+    const freeMax = (usedA === 0 ? 1 : 0) + (!classic && usedB === 0 ? 1 : 0);
+    const capS = r => Math.min(20, r === 0 ? 0 : bonusI ? 4 * r : 3 + 4 * (r - 1));
+    const cap3 = r => Math.min(20, 3 * r);
+    const S_ = categoryReach(rows, SEQ), M_ = categoryReach(rows, MAT), L_ = categoryReach(rows, LAD);
+    const need = 100 - base;
+    // clearly lost: not even with every round in every category, the free books and Bonus III
+    if (S_.plain[capS(k) + freeMax] + M_.plain[cap3(k) + freeMax] + L_.plain[cap3(k) + freeMax] + 5 < need) return false;
+    // clearly alive: some split of the rounds gets there without free books or Bonus III
+    for (let rS = 0; rS <= k; rS++) for (let rM = 0; rM <= k - rS; rM++) {
+      if (S_.plain[capS(rS)] + M_.plain[cap3(rM)] + L_.plain[cap3(k - rS - rM)] >= need) return true;
+    }
+    const key = (classic ? 'c' : 'm') + k + usedA + usedB + Array.prototype.join.call(rows, ',');
+    const hit = reachCache.get(key);
+    if (hit !== undefined) return hit;
+    let ok = false;
+    for (let rS = 0; rS <= k && !ok; rS++) for (let rM = 0; rM <= k - rS && !ok; rM++) {
+      const cS = capS(rS), cM = cap3(rM), cL = cap3(k - rS - rM);
+      for (let a = 0; a <= 5 && !ok; a++) for (let c = 0; c <= a && !ok; c++) {
+        const free = (usedA === 0 && a >= 5 ? 1 : 0) + (!classic && usedB === 0 && c >= 4 ? 1 : 0);
+        for (let fS = 0; fS <= free && !ok; fS++) for (let fM = 0; fM <= free - fS && !ok; fM++) {
+          const fL = free - fS - fM;
+          const sg = S_.flags[cS + fS][a * 6 + c];
+          if (sg <= NEG) continue;
+          for (const mAll of [0, 5]) for (const lAll of [0, 5]) {
+            const m = M_.flags[cM + fM][mAll * 6], l = L_.flags[cL + fL][lAll * 6];
+            if (m <= NEG || l <= NEG) continue;
+            const bonusIII = c >= 5 || (!classic && (mAll === 5 || lAll === 5));
+            if (sg + m + l + (bonusIII ? 5 : 0) >= need) { ok = true; break; }
+          }
+        }
+      }
+    }
+    if (reachCache.size > 200000) reachCache.clear();
+    reachCache.set(key, ok);
+    return ok;
+  }
+
   function hasQuad(rows) {
     for (let i = 0; i < ROWS; i++) if (SCORE[MAT][rows[ROWS + i]] >= 20) return true;
     return false;
@@ -1806,7 +1934,7 @@
   function positionKey(st, roundsLeft, classic) {
     return (classic ? 'c' : 'm') + roundsLeft + Solver.prototype.key.call(null, st.rows, st.bank, st.usedA, st.usedB, roundsLeft);
   }
-  const api = { Solver, fromGame, summarize, makeState, enc, dec, E, SEQ, MAT, LAD, CAT_NAMES, ROLLS, SCORE, LEGAL, CANON, CANON_LAD, CLASS, ROW_LE, getExt, terminalScore, hasQuad, positionKey,
+  const api = { Solver, fromGame, summarize, makeState, enc, dec, E, SEQ, MAT, LAD, CAT_NAMES, ROLLS, SCORE, LEGAL, CANON, CANON_LAD, CLASS, ROW_LE, getExt, terminalScore, hasQuad, positionKey, canStillReach100,
     // for running the round-8 search across workers (see bestBookingBnB for the order of work)
     compareValues: cmp, compareFirst3: cmp3, tieBreakBetter: tieBetter, describeValue: describe, candidateOf };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

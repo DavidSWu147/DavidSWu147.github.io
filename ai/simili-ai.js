@@ -240,7 +240,11 @@
       return [v[0] / 1000, v[1] / 1000 / 150, v[2] / 1000];
     }
     const pair = this.pair(rows, bank, usedA, usedB, k);
-    return [(pair[0][0] + pair[1][0]) / 2, (pair[0][1] + pair[1][1]) / 2, (pair[0][2] + pair[1][2]) / 2];
+    const q = (pair[0][2] + pair[1][2]) / 2;
+    // 100 out of reach even with every digit at hand (S.canStillReach100): lost for sure,
+    // whatever the network says (it only keeps its Quad estimate)
+    if (!S.canStillReach100(rows, usedA, usedB, k, this.classic)) return [0, 0, q];
+    return [(pair[0][0] + pair[1][0]) / 2, (pair[0][1] + pair[1][1]) / 2, q];
   };
   // Both networks' estimates (the same one twice if there is only one).
   // base (optional, from baseFor): the other categories' rows already added in.
