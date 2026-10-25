@@ -1786,29 +1786,20 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   };
   let shortDone = 0,
     soFarSent = false;
-  // report the best so far: once the first R8_SHORTLIST positions (in estimate order) are
-  // finished or skipped, then whenever it improves
-  // (reportAll, for the computer: from the first position solved on; it checks the
-  // network's choice first, see prioritize below)
+  // report the best so far (for the computer, which checks the network's choice first, see
+  // prioritize below; reportAll is now how every search reports)
   const shortlistTick = (g, improved) => {
     g.done = true;
     if (g.priority && !priorityDone) {
       priorityDone = true;
       improved = true;
     }
-    // (every decision, not only the big ones: Matching and Ladder searches can take minutes too)
+    // From the first position solved on, and whenever it improves (the first ones are solved
+    // with nothing to beat, so they are the slowest; waiting for a whole first batch meant
+    // waiting for the slowest of them, often nearly to the end of the search)
     if (tied.length === 0) return;
-    if (reportAll) {
-      if (soFarSent && !improved) return;
-      soFarSent = true;
-    } else if (!soFarSent) {
-      // the first batch: one position per worker (at most R8_SHORTLIST), so the first answer
-      // comes after one round of solves, however long a solve takes (Ladder positions with a
-      // free book in reach take 10-30 s each)
-      const short = Math.min(R8_SHORTLIST, n, typeof nWorkers === 'number' ? nWorkers : R8_SHORTLIST);
-      if (g.oi >= short || ++shortDone < short) return;
-      soFarSent = true;
-    } else if (!improved) return;
+    if (soFarSent && !improved) return;
+    soFarSent = true;
     let b = tied[0];
     for (const x of tied) if (tieBetter(x.cand, b.cand)) b = x;
     const c = b.cand;
@@ -1886,7 +1877,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   // with the estimates, estimating everything is a large share of the time to the first answer
   const p0 = useScreen && !netOrder ? 0.25 : 0.1,
     p1 = useScreen && !netOrder ? 0.3 : 0.1;
-  const report = () => onProgress(phase === 0 ? p0 * boundsDone / n : phase === 0.5 ? p0 + (p1 - p0) * refined / refineList.length : phase === 1 ? p1 + (0.9 - p1) * processed / n : phase === 2 ? 0.9 + 0.08 * (tied.length ? tiedDone / tied.length : 1) : 0.98 + 0.02 * (ties.length ? altDone / ties.length : 1), {
+  const report = () => onProgress(phase === 0 ? p0 * boundsDone / n : phase === 0.5 ? p0 + (p1 - p0) * refined / refineList.length : phase === 1 ? p1 + (0.98 - p1) * processed / n : phase === 2 ? 0.98 + 0.015 * (tied.length ? tiedDone / tied.length : 1) : 0.995 + 0.005 * (ties.length ? altDone / ties.length : 1), {
     checked: processed,
     total: n
   });
@@ -3031,7 +3022,9 @@ function PlayerSheet({
         fontSize: 11,
         color: '#8b6914'
       }
-    }, `${pct}% · ${secs}s`)), r8Job && r8Job.final && r8Job.ended && /*#__PURE__*/React.createElement("span", {
+    }, `${pct}% · ${secs}s`,
+    // the plays checked so far, until a best so far shows them in its note
+    job.total && !(ps.hint && ps.hint.soFar && ps.hint.r8 === job.key) ? ` · ${(job.checked || 0).toLocaleString('en-US')} of ${job.total.toLocaleString('en-US')} plays checked` : '')), r8Job && r8Job.final && r8Job.ended && /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 11,
         color: '#8b6914'
