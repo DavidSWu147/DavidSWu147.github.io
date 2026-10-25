@@ -89,6 +89,12 @@ self.onmessage = e => {
     const beats = m.phase === 1
       ? v => best === null || cmp3(v, best) >= 0
       : v => best === null || cmp(v, best) > 0 || (cmp(v, best) === 0 && m.tieWins);
+    // m.quickFirst (a position whose quick bound was not worked out ahead): if even the quick
+    // bound cannot reach the best so far, it is skipped without the per-roll bounds
+    if (m.quickFirst && best !== null && m.phase === 1) {
+      const q = solver.quickBound(st);
+      if (cmp3(q.ub, best) < 0) { self.postMessage({ id: m.id, v: null, bound: q }); return; }
+    }
     const bound = m.bound || solver.positionBound(st);
     solver.exactLoss = m.phase !== 1;
     // m.order: the roll order to use (see valueWithCutoff); the per-roll wins of the

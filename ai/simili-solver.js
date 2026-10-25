@@ -284,60 +284,82 @@
     t[key] = best;
     return best;
   }
-  // best gain from one category's 5 rows with at most b cells (b <= REACH_B), by how many
-  // rows end at 10+ / 15 (Sequence) or 20 (Matching, Ladder): flags[b][x * 6 + y] ("at
-  // least x / y rows"; NEG: impossible) and plain[b] (any). Cached by the 5 rows (in any order).
+  // best gain from one category's 5 rows with at most b cells (b <= REACH_B): plain[b], and
+  // by how many rows end at 10+ / 15 (Sequence) or 20 (Matching, Ladder): flags[b * 36 + x * 6
+  // + y] ("at least x / y rows"; NEG: impossible). Both cached by the 5 rows (in any order).
+  // plain is a small knapsack and settles almost every position; flags only the borderline
+  // ones (it is what made the check cost 0.3 ms a call, too slow for self-play).
   const REACH_B = 22, NEG = -1e9;   // a category has 20 cells, + 2 free books
-  const catReachCache = new Map();
-  function categoryReach(rows, cat) {
-    const codes = [];
-    for (let i = 0; i < ROWS; i++) codes.push(rows[cat * ROWS + i]);
-    codes.sort((x, y) => x - y);
-    const key = cat + ':' + codes.join(',');
-    const hit = catReachCache.get(key);
+  const catPlainCache = new Map(), catFlagsCache = new Map();
+  const catKey = (rows, cat) => {
+    const c0 = rows[cat * ROWS], c1 = rows[cat * ROWS + 1], c2 = rows[cat * ROWS + 2], c3 = rows[cat * ROWS + 3], c4 = rows[cat * ROWS + 4];
+    const codes = [c0, c1, c2, c3, c4].sort((x, y) => x - y);
+    return cat + ':' + codes.join(',');
+  };
+  function categoryPlain(rows, cat) {
+    const key = catKey(rows, cat);
+    const hit = catPlainCache.get(key);
     if (hit) return hit;
-    let cur = [];
-    for (let b = 0; b <= REACH_B; b++) cur.push(new Float64Array(36).fill(NEG));
-    cur[0][0] = 0;
-    for (const code of codes) {
-      const base = SCORE[cat][code];
+    let cur = new Float64Array(REACH_B + 1), next = new Float64Array(REACH_B + 1);
+    for (let i = 0; i < ROWS; i++) {
+      const code = rows[cat * ROWS + i], base = SCORE[cat][code];
+      next.set(cur);
+      for (let c = 1; c <= 4; c++) {
+        const g = rowReach(cat, code, c) - base;
+        if (g <= 0) continue;
+        for (let bb = REACH_B; bb >= c; bb--) if (cur[bb - c] + g > next[bb]) next[bb] = cur[bb - c] + g;
+      }
+      const t = cur; cur = next; next = t;
+    }
+    for (let bb = 1; bb <= REACH_B; bb++) if (cur[bb - 1] > cur[bb]) cur[bb] = cur[bb - 1];
+    if (catPlainCache.size > 200000) catPlainCache.clear();
+    catPlainCache.set(key, cur);
+    return cur;
+  }
+  function categoryFlags(rows, cat) {
+    const key = catKey(rows, cat);
+    const hit = catFlagsCache.get(key);
+    if (hit) return hit;
+    const W = 36, SZ = (REACH_B + 1) * W;
+    let cur = new Float64Array(SZ).fill(NEG), next = new Float64Array(SZ);
+    cur[0] = 0;
+    for (let i = 0; i < ROWS; i++) {
+      const code = rows[cat * ROWS + i], base = SCORE[cat][code];
       const opts = [];
       for (let c = 0; c <= 4; c++) {
         const sc = rowReach(cat, code, c);
-        opts.push({ c, gain: sc - base, x: cat === SEQ ? (sc >= 10 ? 1 : 0) : (sc >= 20 ? 1 : 0), y: cat === SEQ && sc >= 15 ? 1 : 0 });
+        const o = { c, gain: sc - base, x: cat === SEQ ? (sc >= 10 ? 1 : 0) : (sc >= 20 ? 1 : 0), y: cat === SEQ && sc >= 15 ? 1 : 0 };
+        const p = opts[opts.length - 1];
+        if (p && p.gain === o.gain && p.x === o.x && p.y === o.y) continue;   // a cell more for nothing
+        opts.push(o);
       }
-      const next = [];
-      for (let bb = 0; bb <= REACH_B; bb++) next.push(new Float64Array(36).fill(NEG));
-      for (let bb = 0; bb <= REACH_B; bb++) for (let st = 0; st < 36; st++) {
-        const g = cur[bb][st];
+      next.fill(NEG);
+      for (let bb = 0; bb <= REACH_B; bb++) for (let st = 0; st < W; st++) {
+        const g = cur[bb * W + st];
         if (g === NEG) continue;
-        const x = Math.floor(st / 6), y = st % 6;
+        const x = (st / 6) | 0, y = st % 6;
         for (const o of opts) {
           const nb = bb + o.c;
           if (nb > REACH_B) break;
-          if (o.c > 0 && o.gain === opts[o.c - 1].gain && o.x === opts[o.c - 1].x && o.y === opts[o.c - 1].y) continue;   // a cell more for nothing
-          const ns = (x + o.x) * 6 + (y + o.y);
-          if (g + o.gain > next[nb][ns]) next[nb][ns] = g + o.gain;
+          const k = nb * W + (x + o.x) * 6 + y + o.y;
+          if (g + o.gain > next[k]) next[k] = g + o.gain;
         }
       }
-      cur = next;
+      const t = cur; cur = next; next = t;
     }
-    const flags = [], plain = new Float64Array(REACH_B + 1);
-    for (let bb = 0; bb <= REACH_B; bb++) {
-      const t = new Float64Array(36).fill(NEG);
-      for (let x = 5; x >= 0; x--) for (let y = 5; y >= 0; y--) {
-        let v = Math.max(cur[bb][x * 6 + y], bb > 0 ? flags[bb - 1][x * 6 + y] : NEG);
-        if (x < 5) v = Math.max(v, t[(x + 1) * 6 + y]);
-        if (y < 5) v = Math.max(v, t[x * 6 + y + 1]);
-        t[x * 6 + y] = v;
-      }
-      flags.push(t);
-      plain[bb] = t[0];
+    // at most b cells, at least x / y rows
+    const out = new Float64Array(SZ);
+    for (let bb = 0; bb <= REACH_B; bb++) for (let x = 5; x >= 0; x--) for (let y = 5; y >= 0; y--) {
+      const k = bb * W + x * 6 + y;
+      let v = cur[k];
+      if (bb > 0 && out[k - W] > v) v = out[k - W];
+      if (x < 5 && out[k + 6] > v) v = out[k + 6];
+      if (y < 5 && out[k + 1] > v) v = out[k + 1];
+      out[k] = v;
     }
-    const r = { flags, plain };
-    if (catReachCache.size > 100000) catReachCache.clear();
-    catReachCache.set(key, r);
-    return r;
+    if (catFlagsCache.size > 100000) catFlagsCache.clear();
+    catFlagsCache.set(key, out);
+    return out;
   }
   const reachCache = new Map();
   function canStillReach100(rows, usedA, usedB, k, classic) {
@@ -349,28 +371,29 @@
     const freeMax = (usedA === 0 ? 1 : 0) + (!classic && usedB === 0 ? 1 : 0);
     const capS = r => Math.min(20, r === 0 ? 0 : bonusI ? 4 * r : 3 + 4 * (r - 1));
     const cap3 = r => Math.min(20, 3 * r);
-    const S_ = categoryReach(rows, SEQ), M_ = categoryReach(rows, MAT), L_ = categoryReach(rows, LAD);
+    const pS = categoryPlain(rows, SEQ), pM = categoryPlain(rows, MAT), pL = categoryPlain(rows, LAD);
     const need = 100 - base;
     // clearly lost: not even with every round in every category, the free books and Bonus III
-    if (S_.plain[capS(k) + freeMax] + M_.plain[cap3(k) + freeMax] + L_.plain[cap3(k) + freeMax] + 5 < need) return false;
+    if (pS[capS(k) + freeMax] + pM[cap3(k) + freeMax] + pL[cap3(k) + freeMax] + 5 < need) return false;
     // clearly alive: some split of the rounds gets there without free books or Bonus III
     for (let rS = 0; rS <= k; rS++) for (let rM = 0; rM <= k - rS; rM++) {
-      if (S_.plain[capS(rS)] + M_.plain[cap3(rM)] + L_.plain[cap3(k - rS - rM)] >= need) return true;
+      if (pS[capS(rS)] + pM[cap3(rM)] + pL[cap3(k - rS - rM)] >= need) return true;
     }
     const key = (classic ? 'c' : 'm') + k + usedA + usedB + Array.prototype.join.call(rows, ',');
     const hit = reachCache.get(key);
     if (hit !== undefined) return hit;
+    const fS = categoryFlags(rows, SEQ), fM = categoryFlags(rows, MAT), fL = categoryFlags(rows, LAD);
     let ok = false;
     for (let rS = 0; rS <= k && !ok; rS++) for (let rM = 0; rM <= k - rS && !ok; rM++) {
       const cS = capS(rS), cM = cap3(rM), cL = cap3(k - rS - rM);
       for (let a = 0; a <= 5 && !ok; a++) for (let c = 0; c <= a && !ok; c++) {
         const free = (usedA === 0 && a >= 5 ? 1 : 0) + (!classic && usedB === 0 && c >= 4 ? 1 : 0);
-        for (let fS = 0; fS <= free && !ok; fS++) for (let fM = 0; fM <= free - fS && !ok; fM++) {
-          const fL = free - fS - fM;
-          const sg = S_.flags[cS + fS][a * 6 + c];
+        for (let fSn = 0; fSn <= free && !ok; fSn++) for (let fMn = 0; fMn <= free - fSn && !ok; fMn++) {
+          const fLn = free - fSn - fMn;
+          const sg = fS[(cS + fSn) * 36 + a * 6 + c];
           if (sg <= NEG) continue;
           for (const mAll of [0, 5]) for (const lAll of [0, 5]) {
-            const m = M_.flags[cM + fM][mAll * 6], l = L_.flags[cL + fL][lAll * 6];
+            const m = fM[(cM + fMn) * 36 + mAll * 6], l = fL[(cL + fLn) * 36 + lAll * 6];
             if (m <= NEG || l <= NEG) continue;
             const bonusIII = c >= 5 || (!classic && (mAll === 5 || lAll === 5));
             if (sg + m + l + (bonusIII ? 5 : 0) >= need) { ok = true; break; }

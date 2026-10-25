@@ -91,8 +91,9 @@ take far too long to finish, so the search goes for the likeliest plays first:
    2.3 core-hours of a 6.4 on an 8,548-position decision. If the network cannot be
    loaded, the positions go in order of their upper bounds);
 2. (no second step any more);
-3. positions are then solved exactly in that order. After the first 24 the best so
-   far is booked, with the note "Best so far · 24 of N plays checked", and the
+3. positions are then solved exactly in that order. After the first batch (one per
+   worker, at most 24) the best so far is booked, with the note "Best so far · 10 of N
+   plays checked" (say), and the
    gold bar keeps going. Whenever something better turns up it is booked instead
    (while the sheet still shows the hint);
 4. when every position has been checked (or skipped because its bound shows it
@@ -108,6 +109,14 @@ book finishes the Ladder): 001_ and 110_ (87.8259%), 112_ (35.0791%) and 009_ (3
 Before, the search could not tell the other 180 were hopeless (its bounds allow for the
 free books) and partly solved each of them. With 2 workers the whole search now takes 243 s instead of
 1,355 s (same answer).
+
+Smaller decisions (under 300 positions, usually Matching or Ladder) go in the network's
+order too and report the same way: the best so far once the first batch is checked (one
+position per worker, at most 24: a Ladder position with a free book in reach can take
+10-30 s to solve, so waiting for 24 meant minutes on few workers), the live count of plays
+checked, and "Best play · all N plays checked" at the end. No decision works out the quick bounds of all its positions
+first any more: each position's quick bound is worked out when its turn comes, and it is skipped right there if even that cannot reach the best so far. Only
+if the network cannot be loaded are all the bounds worked out first, to order by them.
 
 Taking the hint back stops it from booking anything by itself; "Hint ready" then
 offers the latest best. The ranking is only used for the order, so the final answer
@@ -480,7 +489,9 @@ start of Round 5, 31.6%). The check is optimistic on purpose, so it never calls 
 winnable position lost (`node ai/test/verify-reach.js`: 0 of 5,000+ against the exact
 solver; it catches about 96% of the truly lost ones, the rest being lost for lack of the
 right digits). It also applies in training (labels and self-play use the same values),
-and costs about 1% of the thinking time.
+and costs about 1% of the thinking time. (A first version took 0.3 ms a check, which is
+fine in play but made self-play 25 times slower: 30,000 checks a game. A plain points-per-cell
+knapsack per category now settles nearly every position, about 5 µs a check.)
 
 **Inputs.** Each row is one of 102 / 52 / 42 interchangeable classes (see "equivalence
 classes" above), so a category is how many of its rows are in each class. Then the bank

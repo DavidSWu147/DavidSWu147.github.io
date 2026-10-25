@@ -1768,7 +1768,12 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   // a fraction of a second) instead of the estimate passes (1 roll in 20, then 1 in 5 for
   // the top 96), which cost about a third of the whole search. If the network cannot be
   // loaded, they are ordered by their upper bounds. opts.noNet: the estimates as before.
-  const netOrder = useScreen && !(opts && opts.noNet) && typeof runAiJobs === 'function';
+  // Every decision, big or small, goes in the network's order, and the quick bounds are not
+  // worked out for all positions first (that took minutes on some Ladder decisions before the
+  // first answer): each position's quick bound comes with its turn (quickFirst in the worker),
+  // and it is skipped right there if even that cannot reach the best so far. Only if the
+  // network cannot be loaded are all the bounds worked out first, to order by them.
+  const netOrder = !(opts && opts.noNet) && typeof runAiJobs === 'function';
   let netState = netOrder ? 'pending' : 'off',
     waitingNet = false,
     pumpRun = null;
@@ -1791,12 +1796,17 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
       priorityDone = true;
       improved = true;
     }
-    if (!useScreen && !reportAll || tied.length === 0) return;
+    // (every decision, not only the big ones: Matching and Ladder searches can take minutes too)
+    if (tied.length === 0) return;
     if (reportAll) {
       if (soFarSent && !improved) return;
       soFarSent = true;
     } else if (!soFarSent) {
-      if (g.oi >= R8_SHORTLIST || ++shortDone < R8_SHORTLIST) return;
+      // the first batch: one position per worker (at most R8_SHORTLIST), so the first answer
+      // comes after one round of solves, however long a solve takes (Ladder positions with a
+      // free book in reach take 10-30 s each)
+      const short = Math.min(R8_SHORTLIST, n, typeof nWorkers === 'number' ? nWorkers : R8_SHORTLIST);
+      if (g.oi >= short || ++shortDone < short) return;
       soFarSent = true;
     } else if (!improved) return;
     let b = tied[0];
@@ -1883,6 +1893,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   // the next piece of work, or null if the current phase has nothing left to hand out
   const nextTask = () => {
     if (phase === 0) {
+      if (netOrder && netState !== 'failed') return null; // (bounds come with each position's turn)
       while (nextIdx < n && groups[nextIdx].dead) {
         nextIdx++;
         boundsDone++;
@@ -1922,7 +1933,7 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
         // a certain loss waits until a best so far is back (then it is skipped below)
         if (order[nextIdx].dead && best3 === null && inFlight > 0) return null;
         const g = order[nextIdx++];
-        if (best3 !== null && cmp3(g.bound.ub, best3) < 0) {
+        if (best3 !== null && g.bound && cmp3(g.bound.ub, best3) < 0) {
           processed++;
           shortlistTick(g, false);
           continue;
@@ -1931,7 +1942,8 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
           msg: {
             ...base(g),
             type: 'solve',
-            bound: g.bound.quick ? null : g.bound,
+            bound: g.bound && !g.bound.quick ? g.bound : null,
+            quickFirst: !g.bound,
             phase: 1,
             best: best3,
             order: rollOrder
@@ -2149,6 +2161,13 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
         screen: solver.screenValue(st, 'sample', m.sample)
       };
       const beats = m.phase === 1 ? v => m.best === null || cmp3(v, m.best) >= 0 : v => m.best === null || cmp(v, m.best) > 0 || cmp(v, m.best) === 0 && m.tieWins;
+      if (m.quickFirst && m.best !== null && m.phase === 1) {
+        const q = solver.quickBound(st);
+        if (cmp3(q.ub, m.best) < 0) return {
+          v: null,
+          bound: q
+        };
+      }
       const bound = m.bound || solver.positionBound(st);
       solver.exactLoss = m.phase !== 1;
       const v = solver.valueWithCutoff(st, bound, beats, {
@@ -4174,10 +4193,10 @@ window.Simili = function Simili() {
       }, best => {
         r8CancelRef.current[playerIdx] = null;
         const prev = (r8JobsRef.current[playerIdx] || {}).result;
-        // after a best-so-far, say the search is complete; otherwise as in rounds 9 and 10
+        // say the search is complete, with how many plays it checked
         const tot = (r8JobsRef.current[playerIdx] || {}).total;
         const all = tot ? `all ${tot.toLocaleString('en-US')} plays checked` : 'all plays checked';
-        const note = prev && !samePlay(prev, best) ? `Better play found · ${all}` : best.placements.length === 0 ? 'Best play: book nothing' : prev ? `Best play · ${all}` : '';
+        const note = prev && !samePlay(prev, best) ? `Better play found · ${all}` : best.placements.length === 0 ? 'Best play: book nothing' : `Best play · ${all}`;
         deliver({
           ...best,
           note,
