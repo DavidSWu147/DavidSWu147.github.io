@@ -5852,20 +5852,11 @@ window.Simili = function Simili() {
       letterSpacing: 1
     }
   }, "Display"), /*#__PURE__*/React.createElement(ToggleSwitch, {
-    checked: darkMode,
-    onChange: setDarkMode,
-    leftLabel: "Light Mode",
-    rightLabel: "Dark Mode"
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 8
-    }
-  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: wideLayout,
     onChange: setWideLayout,
     leftLabel: "Narrow (mobile)",
     rightLabel: "Wide (desktop)"
-  })), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8
     }
@@ -5914,6 +5905,15 @@ window.Simili = function Simili() {
     },
     leftLabel: "Merge Ver. Stats",
     rightLabel: "Split Ver. Stats"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: darkMode,
+    onChange: setDarkMode,
+    leftLabel: "Light Mode",
+    rightLabel: "Dark Mode"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
