@@ -31,6 +31,54 @@ const MAX_BOOK_DEFAULT = 3;
 const MAX_BOOK_SEQ_BONUS = 4;
 const MATCH_GAMES = 4;
 
+// --- Colors: [Light Mode, Dark Mode], keyed by the Light Mode hex. The page uses
+// var(--c-<key>) everywhere, so Dark Mode only swaps these values. ---
+const THEME_COLORS = {
+  // paper, ink and greys (Dark Mode turns them around: dark paper, light ink)
+  fff: ['#fff', '#22211d'],
+  fafafa: ['#fafafa', '#282621'],
+  fefcf6: ['#fefcf6', '#25231f'],
+  faf6ed: ['#faf6ed', '#2a2823'],
+  f5f0e6: ['#f5f0e6', '#2f2c26'],
+  f0ebe0: ['#f0ebe0', '#181714'],
+  e8e4d8: ['#e8e4d8', '#121110'],
+  eee: ['#eee', '#36332d'],
+  ddd: ['#ddd', '#403c35'],
+  ccc: ['#ccc', '#524d44'],
+  bbb: ['#bbb', '#68635a'],
+  aaa: ['#aaa', '#7a756b'],
+  999: ['#999', '#8c877c'],
+  888: ['#888', '#a29c90'],
+  '2a2a2a': ['#2a2a2a', '#e8e2d4'],
+  // reds, blues, greens
+  c0392b: ['#c0392b', '#ec6a5b'],
+  d4442a: ['#d4442a', '#f07a5e'],
+  fde8e8: ['#fde8e8', '#47292a'],
+  '2a6fdb': ['#2a6fdb', '#79a6f2'],
+  '1976d2': ['#1976d2', '#6aaef2'],
+  e3f2fd: ['#e3f2fd', '#1d2b3b'],
+  eef4ff: ['#eef4ff', '#20283a'],
+  '2a4f8f': ['#2a4f8f', '#a8c0ee'],
+  '6d8fc9': ['#6d8fc9', '#7f9fd6'],
+  '27ae60': ['#27ae60', '#52c985'],
+  e8f5e9: ['#e8f5e9', '#1f3526'],
+  // golds and oranges (hints, highlights)
+  '8b6914': ['#8b6914', '#ddb95c'],
+  b8860b: ['#b8860b', '#c39a35'],
+  d4a017: ['#d4a017', '#dcb040'],
+  fffde6: ['#fffde6', '#37321d'],
+  f7e08a: ['#f7e08a', '#5e5120'],
+  f5e6a8: ['#f5e6a8', '#4d4423'],
+  f3ead0: ['#f3ead0', '#3a3522'],
+  ffeaa7: ['#ffeaa7', '#4b401d'],
+  fff9c4: ['#fff9c4', '#423c1d'],
+  f39c12: ['#f39c12', '#f2a93b'],
+  f9a825: ['#f9a825', '#f3b542'],
+  fff3e0: ['#fff3e0', '#3b2d1b'],
+  e65100: ['#e65100', '#ff8c42']
+};
+const themeCss = mode => Object.entries(THEME_COLORS).map(([k, v]) => `--c-${k}: ${v[mode]};`).join(' ');
+
 // --- Utility Functions ---
 function isValidSequence(digits) {
   if (digits.length < 2) return true;
@@ -906,8 +954,8 @@ function SlotReel({
     style: {
       width: 56,
       height: 72,
-      background: isStopped ? '#fff' : '#f5f0e6',
-      border: '2px solid #2a2a2a',
+      background: isStopped ? 'var(--c-fff)' : 'var(--c-f5f0e6)',
+      border: '2px solid var(--c-2a2a2a)',
       borderRadius: 6,
       display: 'flex',
       alignItems: 'center',
@@ -915,7 +963,7 @@ function SlotReel({
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 36,
       fontWeight: 'bold',
-      color: '#2a2a2a',
+      color: 'var(--c-2a2a2a)',
       boxShadow: spinning && !isStopped ? '0 0 12px rgba(180,140,60,0.4)' : '1px 2px 4px rgba(0,0,0,0.15)',
       transition: 'box-shadow 0.3s, background 0.3s',
       position: 'relative',
@@ -948,11 +996,11 @@ function BankDigit({
       height: 32,
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 20,
-      color: used ? '#bbb' : selected ? '#c0392b' : '#2a2a2a',
+      color: used ? 'var(--c-bbb)' : selected ? 'var(--c-c0392b)' : 'var(--c-2a2a2a)',
       textDecoration: used && !crossOut ? 'line-through' : 'none',
       cursor: selectable && !used ? 'pointer' : 'default',
-      background: selected ? '#fde8e8' : 'transparent',
-      border: selected ? '2px solid #c0392b' : '2px solid transparent',
+      background: selected ? 'var(--c-fde8e8)' : 'transparent',
+      border: selected ? '2px solid var(--c-c0392b)' : '2px solid transparent',
       borderRadius: 4,
       transition: 'all 0.15s',
       fontWeight: selected ? 'bold' : 'normal',
@@ -969,7 +1017,7 @@ function BankDigit({
       alignItems: 'center',
       justifyContent: 'center',
       fontSize: 26,
-      color: '#bbb',
+      color: 'var(--c-bbb)',
       pointerEvents: 'none',
       lineHeight: 1
     }
@@ -990,14 +1038,14 @@ function GridCell({
     style: {
       width: 36,
       height: 36,
-      border: hinted ? '1.5px solid #b8860b' : '1.5px solid #888',
+      border: hinted ? '1.5px solid var(--c-b8860b)' : '1.5px solid var(--c-888)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 20,
-      color: '#2a2a2a',
-      background: clickable ? '#fffde6' : hinted ? '#f7e08a' : highlight ? '#e8f5e9' : '#fff',
+      color: 'var(--c-2a2a2a)',
+      background: clickable ? 'var(--c-fffde6)' : hinted ? 'var(--c-f7e08a)' : highlight ? 'var(--c-e8f5e9)' : 'var(--c-fff)',
       cursor: clickable ? 'pointer' : 'default',
       transition: 'background 0.15s',
       position: 'relative'
@@ -1012,7 +1060,7 @@ function GridCell({
       justifyContent: hints.length === 1 ? 'center' : 'space-between',
       padding: '0 3px',
       fontSize: 11,
-      color: '#999',
+      color: 'var(--c-999)',
       fontWeight: 'normal',
       lineHeight: '12px',
       pointerEvents: 'none'
@@ -1040,7 +1088,7 @@ function ScoreTrack({
   const passedStyle = n => ({
     fontFamily: "'Special Elite', 'Courier New', monospace",
     fontSize: 14,
-    color: n < adjustedScore ? '#bbb' : '#2a2a2a',
+    color: n < adjustedScore ? 'var(--c-bbb)' : 'var(--c-2a2a2a)',
     textDecoration: n < adjustedScore && !crossOut ? 'line-through' : 'none',
     minWidth: 26,
     textAlign: 'center',
@@ -1058,7 +1106,7 @@ function ScoreTrack({
       alignItems: 'center',
       justifyContent: 'center',
       fontSize: 26,
-      color: '#bbb',
+      color: 'var(--c-bbb)',
       pointerEvents: 'none',
       lineHeight: 1
     }
@@ -1079,12 +1127,12 @@ function ScoreTrack({
     key: n,
     style: {
       ...passedStyle(n),
-      color: n < adjustedScore ? '#bbb' : n < adjustedScore + 5 && adjustedScore % 10 >= 5 ? '#bbb' : '#2a2a2a'
+      color: n < adjustedScore ? 'var(--c-bbb)' : n < adjustedScore + 5 && adjustedScore % 10 >= 5 ? 'var(--c-bbb)' : 'var(--c-2a2a2a)'
     }
   }, String(n).padStart(2, '0'), n < adjustedScore && crossOut && xOverlay)), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 16,
-      color: adjustedScore >= 100 ? '#c0392b' : '#ccc',
+      color: adjustedScore >= 100 ? 'var(--c-c0392b)' : 'var(--c-ccc)',
       position: 'relative',
       top: -0.5,
       display: 'inline-block',
@@ -1103,7 +1151,7 @@ function ScoreTrack({
   }, String(n).padStart(2, '0'), n < adjustedScore && crossOut && xOverlay)), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 14,
-      color: '#c0392b',
+      color: 'var(--c-c0392b)',
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontWeight: displayScore > 100 ? 'normal' : 'bold',
       minWidth: 26,
@@ -1137,7 +1185,7 @@ function ToggleSwitch({
   }, /*#__PURE__*/React.createElement("span", {
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
-      color: !checked ? '#2a2a2a' : '#aaa',
+      color: !checked ? 'var(--c-2a2a2a)' : 'var(--c-aaa)',
       fontWeight: !checked ? 'bold' : 'normal',
       transition: 'all 0.15s',
       minWidth: 120,
@@ -1147,7 +1195,7 @@ function ToggleSwitch({
     style: {
       width: 36,
       height: 20,
-      background: checked ? '#2a2a2a' : '#ccc',
+      background: checked ? 'var(--c-2a2a2a)' : 'var(--c-ccc)',
       borderRadius: 10,
       position: 'relative',
       transition: 'background 0.2s',
@@ -1157,7 +1205,7 @@ function ToggleSwitch({
     style: {
       width: 16,
       height: 16,
-      background: '#fff',
+      background: 'var(--c-fff)',
       borderRadius: '50%',
       position: 'absolute',
       top: 2,
@@ -1168,7 +1216,7 @@ function ToggleSwitch({
   })), /*#__PURE__*/React.createElement("span", {
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
-      color: checked ? '#2a2a2a' : '#aaa',
+      color: checked ? 'var(--c-2a2a2a)' : 'var(--c-aaa)',
       fontWeight: checked ? 'bold' : 'normal',
       transition: 'all 0.15s'
     }
@@ -2349,9 +2397,9 @@ function NextRoundPreview({
     fontFamily: "'Special Elite', 'Courier New', monospace",
     fontSize: 12,
     padding: '4px 10px',
-    background: primary ? '#eef4ff' : '#fff',
-    color: primary ? '#2a4f8f' : '#888',
-    border: primary ? '1.5px solid #6d8fc9' : '1.5px solid #ccc',
+    background: primary ? 'var(--c-eef4ff)' : 'var(--c-fff)',
+    color: primary ? 'var(--c-2a4f8f)' : 'var(--c-888)',
+    border: primary ? '1.5px solid var(--c-6d8fc9)' : '1.5px solid var(--c-ccc)',
     borderRadius: 4,
     cursor: 'pointer'
   });
@@ -2361,7 +2409,7 @@ function NextRoundPreview({
     style: {
       marginTop: 8,
       paddingTop: 8,
-      borderTop: '1px dotted #ddd'
+      borderTop: '1px dotted var(--c-ddd)'
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2378,7 +2426,7 @@ function NextRoundPreview({
       flex: 1,
       minWidth: 120,
       height: 8,
-      background: '#eee',
+      background: 'var(--c-eee)',
       borderRadius: 4,
       overflow: 'hidden'
     }
@@ -2386,7 +2434,7 @@ function NextRoundPreview({
     style: {
       width: `${pct}%`,
       height: '100%',
-      background: '#6d8fc9',
+      background: 'var(--c-6d8fc9)',
       transition: 'width 0.3s'
     }
   })), /*#__PURE__*/React.createElement("span", {
@@ -2421,8 +2469,8 @@ function NextRoundPreview({
         textAlign: 'center',
         padding: '4px 2px',
         borderRadius: 4,
-        border: best ? '2px solid #2a2a2a' : '1px solid #ddd',
-        background: best ? '#fff' : '#fafafa'
+        border: best ? '2px solid var(--c-2a2a2a)' : '1px solid var(--c-ddd)',
+        background: best ? 'var(--c-fff)' : 'var(--c-fafafa)'
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -2433,7 +2481,7 @@ function NextRoundPreview({
       style: {
         fontSize: 14,
         fontWeight: zero || full ? 'bold' : 'normal',
-        color: zero ? redInk : full ? '#27ae60' : '#2a2a2a'
+        color: zero ? redInk : full ? 'var(--c-27ae60)' : 'var(--c-2a2a2a)'
       }
     }, `${c.winPctExact}%`), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -2502,15 +2550,15 @@ function PlayerSheet({
   const playerLabel = computer ? 'Computer' : twoPlayer ? playerName || `Player ${playerIdx + 1}` : null;
   // the computer's category: hidden (buttons, none highlighted) until you reveal it or roll
   const cpuShown = !!(computer && ps.chosenCategory && !computer.hideCategory);
-  const playerColor = playerIdx === 0 ? '#2a6fdb' : '#d4442a';
+  const playerColor = playerIdx === 0 ? 'var(--c-2a6fdb)' : 'var(--c-d4442a)';
   return /*#__PURE__*/React.createElement("div", {
     style: {
       flex: 1,
       minWidth: 0,
-      border: twoPlayer ? '2px solid #ddd' : 'none',
+      border: twoPlayer ? '2px solid var(--c-ddd)' : 'none',
       borderRadius: twoPlayer ? 8 : 0,
       padding: twoPlayer ? '12px 10px' : 0,
-      background: twoPlayer ? '#fefcf6' : 'transparent'
+      background: twoPlayer ? 'var(--c-fefcf6)' : 'transparent'
     }
   }, playerLabel && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2574,9 +2622,9 @@ function PlayerSheet({
       fontSize: 16,
       lineHeight: '20px',
       padding: '6px 16px',
-      background: '#fff',
-      color: '#2a2a2a',
-      border: '2px solid #2a2a2a',
+      background: 'var(--c-fff)',
+      color: 'var(--c-2a2a2a)',
+      border: '2px solid var(--c-2a2a2a)',
       borderRadius: 4,
       cursor: 'pointer'
     }
@@ -2593,9 +2641,9 @@ function PlayerSheet({
         fontSize: 16,
         lineHeight: '20px',
         padding: '6px 16px',
-        background: on ? '#2a2a2a' : '#fff',
-        color: on ? '#fff' : '#2a2a2a',
-        border: '2px solid #2a2a2a',
+        background: on ? 'var(--c-2a2a2a)' : 'var(--c-fff)',
+        color: on ? 'var(--c-fff)' : 'var(--c-2a2a2a)',
+        border: '2px solid var(--c-2a2a2a)',
         borderRadius: 4,
         cursor: clickable ? 'pointer' : 'default',
         transition: 'all 0.15s',
@@ -2643,7 +2691,7 @@ function PlayerSheet({
       style: {
         fontSize: 16,
         fontWeight: isZero || isFull ? 'bold' : 'normal',
-        color: isZero ? redInk : isFull ? '#27ae60' : '#2a2a2a'
+        color: isZero ? redInk : isFull ? 'var(--c-27ae60)' : 'var(--c-2a2a2a)'
       }
     }, isFull ? '100%' : isZero ? '0%' : c.winPctExact + '%'), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -2668,7 +2716,7 @@ function PlayerSheet({
       style: {
         fontSize: 16,
         fontWeight: isZero || isFull ? 'bold' : 'normal',
-        color: isZero ? redInk : isFull ? '#27ae60' : '#2a2a2a'
+        color: isZero ? redInk : isFull ? 'var(--c-27ae60)' : 'var(--c-2a2a2a)'
       }
     }, pctStr), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -2704,9 +2752,9 @@ function PlayerSheet({
       fontSize: 16,
       lineHeight: '20px',
       padding: '6px 16px',
-      background: '#fff',
-      color: '#2a2a2a',
-      border: '2px solid #2a2a2a',
+      background: 'var(--c-fff)',
+      color: 'var(--c-2a2a2a)',
+      border: '2px solid var(--c-2a2a2a)',
       borderRadius: 4,
       cursor: 'pointer',
       transition: 'all 0.15s'
@@ -2897,7 +2945,7 @@ function PlayerSheet({
     }));
   }))), (phase === 'book' || phase === 'endgame-bonus' && ps.bonusBookPhase) && !ps.roundDone && /*#__PURE__*/React.createElement("div", {
     style: {
-      borderTop: '1px dashed #ccc',
+      borderTop: '1px dashed var(--c-ccc)',
       paddingTop: 8,
       marginTop: 6
     }
@@ -2919,8 +2967,8 @@ function PlayerSheet({
       fontSize: 11,
       marginLeft: 6,
       padding: '2px 6px',
-      background: '#eee',
-      border: '1px solid #ccc',
+      background: 'var(--c-eee)',
+      border: '1px solid var(--c-ccc)',
       borderRadius: 3,
       cursor: 'pointer'
     }
@@ -2937,11 +2985,11 @@ function PlayerSheet({
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 12,
       padding: '4px 10px',
-      background: '#fffde6',
-      border: '1.5px solid #b8860b',
+      background: 'var(--c-fffde6)',
+      border: '1.5px solid var(--c-b8860b)',
       borderRadius: 4,
       cursor: 'pointer',
-      color: '#8b6914'
+      color: 'var(--c-8b6914)'
     }
   }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && /*#__PURE__*/React.createElement("button", {
     onClick: () => onUseBonusBook(playerIdx, 'B'),
@@ -2949,11 +2997,11 @@ function PlayerSheet({
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 12,
       padding: '4px 10px',
-      background: '#fffde6',
-      border: '1.5px solid #b8860b',
+      background: 'var(--c-fffde6)',
+      border: '1.5px solid var(--c-b8860b)',
       borderRadius: 4,
       cursor: 'pointer',
-      color: '#8b6914'
+      color: 'var(--c-8b6914)'
     }
   }, "Use Seq Bonus II-B")), !ps.bonusBookPhase && /*#__PURE__*/React.createElement(React.Fragment, null, ps.undoStack.length > 0 && !computer && /*#__PURE__*/React.createElement("button", {
     onClick: () => onUndo(playerIdx),
@@ -2961,24 +3009,24 @@ function PlayerSheet({
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 12,
       padding: '4px 10px',
-      background: '#fff',
-      color: '#888',
-      border: '1.5px solid #ccc',
+      background: 'var(--c-fff)',
+      color: 'var(--c-888)',
+      border: '1.5px solid var(--c-ccc)',
       borderRadius: 4,
       cursor: 'pointer'
     },
     onMouseEnter: e => {
-      e.target.style.color = '#c0392b';
-      e.target.style.borderColor = '#c0392b';
+      e.target.style.color = 'var(--c-c0392b)';
+      e.target.style.borderColor = 'var(--c-c0392b)';
     },
     onMouseLeave: e => {
-      e.target.style.color = '#888';
-      e.target.style.borderColor = '#ccc';
+      e.target.style.color = 'var(--c-888)';
+      e.target.style.borderColor = 'var(--c-ccc)';
     }
   }, "\u21A9 Undo"), computer && (computer.status || ps.hint && ps.hint.note) && /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 11,
-      color: '#8b6914'
+      color: 'var(--c-8b6914)'
     }
   }, computer.status || ps.hint.note), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && !computer && (() => {
     // Round 8: the hint is worked out in the background (gold progress bar). Before
@@ -2994,19 +3042,19 @@ function PlayerSheet({
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 12,
         padding: '4px 10px',
-        background: ps.hint ? '#d4a017' : '#fffde6',
-        color: ps.hint ? '#fff' : '#8b6914',
-        border: '1.5px solid #b8860b',
+        background: ps.hint ? 'var(--c-d4a017)' : 'var(--c-fffde6)',
+        color: ps.hint ? 'var(--c-fff)' : 'var(--c-8b6914)',
+        border: '1.5px solid var(--c-b8860b)',
         borderRadius: 4,
         cursor: 'pointer',
         fontWeight: ps.hint ? 'bold' : 'normal',
-        boxShadow: ps.hint ? '0 0 0 2px #f5e6a8' : 'none'
+        boxShadow: ps.hint ? '0 0 0 2px var(--c-f5e6a8)' : 'none'
       }
     }, "\uD83D\uDCA1 Hint"), job && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       style: {
         width: 110,
         height: 8,
-        background: '#f3ead0',
+        background: 'var(--c-f3ead0)',
         borderRadius: 4,
         overflow: 'hidden'
       }
@@ -3014,30 +3062,30 @@ function PlayerSheet({
       style: {
         width: `${pct}%`,
         height: '100%',
-        background: '#d4a017',
+        background: 'var(--c-d4a017)',
         transition: 'width 0.3s'
       }
     })), /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 11,
-        color: '#8b6914'
+        color: 'var(--c-8b6914)'
       }
     }, `${pct}% · ${secs}s`,
     // the plays checked so far, until a best so far shows them in its note
     job.total && !(ps.hint && ps.hint.soFar && ps.hint.r8 === job.key) ? ` · ${(job.checked || 0).toLocaleString('en-US')} of ${job.total.toLocaleString('en-US')} plays checked` : '')), r8Job && r8Job.final && r8Job.ended && /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 11,
-        color: '#8b6914'
+        color: 'var(--c-8b6914)'
       }
     }, `${Math.round((r8Job.ended - r8Job.started) / 1000)}s`), ready && /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 11,
-        color: '#8b6914'
+        color: 'var(--c-8b6914)'
       }
     }, "Hint ready"), ps.hint && ps.hint.note && /*#__PURE__*/React.createElement("span", {
       style: {
         fontSize: 11,
-        color: '#8b6914'
+        color: 'var(--c-8b6914)'
       }
     }, ps.hint.soFar && job && job.key === ps.hint.r8 && job.total ? `Best so far · ${(job.checked || 0).toLocaleString('en-US')} of ${job.total.toLocaleString('en-US')} plays checked` : ps.hint.note));
   })(), (!computer || computer.booked || phase !== 'book') && /*#__PURE__*/React.createElement("button", {
@@ -3046,8 +3094,8 @@ function PlayerSheet({
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 13,
       padding: '4px 14px',
-      background: '#2a2a2a',
-      color: '#fff',
+      background: 'var(--c-2a2a2a)',
+      color: 'var(--c-fff)',
       border: 'none',
       borderRadius: 4,
       cursor: 'pointer',
@@ -3055,7 +3103,7 @@ function PlayerSheet({
     }
   }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round')))), phase === 'book' && !ps.bonusBookPhase && (round === TOTAL_ROUNDS - 3 || round === TOTAL_ROUNDS - 2) && hintsOn && typeof SimiliSolver !== 'undefined' && !computer && /*#__PURE__*/React.createElement("div", {
     style: ps.roundDone ? {
-      borderTop: '1px dashed #ccc',
+      borderTop: '1px dashed var(--c-ccc)',
       paddingTop: 8,
       marginTop: 6
     } : undefined
@@ -3073,15 +3121,15 @@ function PlayerSheet({
       style: {
         padding: 10,
         marginTop: 6,
-        background: '#fffde6',
-        border: '1.5px solid #b8860b',
+        background: 'var(--c-fffde6)',
+        border: '1.5px solid var(--c-b8860b)',
         borderRadius: 6
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 13,
         fontWeight: 'bold',
-        color: '#8b6914',
+        color: 'var(--c-8b6914)',
         marginBottom: 4
       }
     }, anyUnused ? 'Use remaining Sequence Bonuses!' : 'All bonuses used!'), /*#__PURE__*/React.createElement("div", {
@@ -3097,8 +3145,8 @@ function PlayerSheet({
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 12,
         padding: '4px 10px',
-        background: '#fff',
-        border: '1.5px solid #b8860b',
+        background: 'var(--c-fff)',
+        border: '1.5px solid var(--c-b8860b)',
         borderRadius: 4,
         cursor: 'pointer'
       }
@@ -3108,8 +3156,8 @@ function PlayerSheet({
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 12,
         padding: '4px 10px',
-        background: '#fff',
-        border: '1.5px solid #b8860b',
+        background: 'var(--c-fff)',
+        border: '1.5px solid var(--c-b8860b)',
         borderRadius: 4,
         cursor: 'pointer'
       }
@@ -3119,9 +3167,9 @@ function PlayerSheet({
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 12,
         padding: '4px 10px',
-        background: '#fff',
-        color: '#888',
-        border: '1.5px solid #ccc',
+        background: 'var(--c-fff)',
+        color: 'var(--c-888)',
+        border: '1.5px solid var(--c-ccc)',
         borderRadius: 4,
         cursor: 'pointer'
       }
@@ -3131,8 +3179,8 @@ function PlayerSheet({
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 12,
         padding: '4px 12px',
-        background: '#2a2a2a',
-        color: '#fff',
+        background: 'var(--c-2a2a2a)',
+        color: 'var(--c-fff)',
         border: 'none',
         borderRadius: 4,
         cursor: 'pointer',
@@ -3141,7 +3189,7 @@ function PlayerSheet({
     }, anyUnused ? 'Skip & Finish' : 'Finish')));
   })(), /*#__PURE__*/React.createElement("div", {
     style: {
-      borderTop: '1px dashed #ccc',
+      borderTop: '1px dashed var(--c-ccc)',
       paddingTop: 6,
       marginTop: 8,
       fontSize: 11,
@@ -3149,29 +3197,29 @@ function PlayerSheet({
     }
   }, /*#__PURE__*/React.createElement("strong", null, "Sequence Bonus:"), ' ', /*#__PURE__*/React.createElement("span", {
     style: {
-      color: seqBonusI ? '#27ae60' : '#999'
+      color: seqBonusI ? 'var(--c-27ae60)' : 'var(--c-999)'
     }
   }, "I ", seqBonusI ? '✓' : '○'), ' · ', classicMode ? /*#__PURE__*/React.createElement("span", {
     style: {
-      color: ps.seqBonusIIAUnlocked ? '#27ae60' : '#999'
+      color: ps.seqBonusIIAUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
     }
   }, "II ", ps.seqBonusIIAUnlocked ? ps.seqBonusIIAUsed ? `✓(${ps.seqBonusIIACategory})` : '★' : '○') : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
     style: {
-      color: ps.seqBonusIIAUnlocked ? '#27ae60' : '#999'
+      color: ps.seqBonusIIAUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
     }
   }, "II-A ", ps.seqBonusIIAUnlocked ? ps.seqBonusIIAUsed ? `✓(${ps.seqBonusIIACategory})` : '★' : '○'), ' · ', /*#__PURE__*/React.createElement("span", {
     style: {
-      color: ps.seqBonusIIBUnlocked ? '#27ae60' : '#999'
+      color: ps.seqBonusIIBUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
     }
   }, "II-B ", ps.seqBonusIIBUnlocked ? ps.seqBonusIIBUsed ? `✓(${ps.seqBonusIIBCategory})` : '★' : '○')), ' · ', /*#__PURE__*/React.createElement("span", {
     style: {
-      color: seqBonusIII ? '#27ae60' : '#999'
+      color: seqBonusIII ? 'var(--c-27ae60)' : 'var(--c-999)'
     }
   }, "III ", seqBonusIII ? '✓ (+5)' : '○'), quadBonus && (() => {
     const earned = hasQuadBonus(grids, laxPlacement);
     return /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Quad Bonus"), ' ', /*#__PURE__*/React.createElement("span", {
       style: {
-        color: earned ? '#27ae60' : '#999'
+        color: earned ? 'var(--c-27ae60)' : 'var(--c-999)'
       }
     }, earned ? '✓ (+1)' : '○'));
   })(), laxPlacement && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Lax Placement On")), hintsOn && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Hints On"))));
@@ -3618,6 +3666,7 @@ window.Simili = function Simili() {
   const [logPageIndex, setLogPageIndex] = useState(-1); // -1 means latest page
   const [statsPageIndex, setStatsPageIndex] = useState(0);
   const [wideLayout, setWideLayout] = useState(false);
+  const [darkMode, setDarkMode] = useState(false); // Light Mode (the original look) by default
   const [verticalCategories, setVerticalCategories] = useState(false);
   const [cellHints, setCellHints] = useState(false);
   const [extendedStats, setExtendedStats] = useState(false);
@@ -5029,9 +5078,16 @@ window.Simili = function Simili() {
       tied: true
     };
   };
-  const paperBg = '#faf6ed';
-  const inkColor = '#2a2a2a';
-  const redInk = '#c0392b';
+
+  // Light Mode / Dark Mode: every color on the page is a CSS variable (--c-<light hex>),
+  // set on the root element from THEME_COLORS below
+  useEffect(() => {
+    document.body.style.background = darkMode ? THEME_COLORS.f0ebe0[1] : '';
+    document.documentElement.style.colorScheme = darkMode ? 'dark' : '';
+  }, [darkMode]);
+  const paperBg = 'var(--c-faf6ed)';
+  const inkColor = 'var(--c-2a2a2a)';
+  const redInk = 'var(--c-c0392b)';
   const gameOverInfo = phase === 'gameover' ? players.map(p => {
     const score = getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus);
     const won = !abandoned && score >= 100;
@@ -5045,9 +5101,10 @@ window.Simili = function Simili() {
     };
   }) : [];
   return /*#__PURE__*/React.createElement("div", {
+    className: darkMode ? 'simili-root simili-dark' : 'simili-root',
     style: {
       minHeight: '100vh',
-      background: 'linear-gradient(to bottom, #f0ebe0, #faf6ed 5%, #faf6ed 95%, #f0ebe0)',
+      background: 'linear-gradient(to bottom, var(--c-f0ebe0), var(--c-faf6ed) 5%, var(--c-faf6ed) 95%, var(--c-f0ebe0))',
       fontFamily: "'Special Elite', 'Courier New', monospace",
       color: inkColor,
       padding: '20px 8px'
@@ -5055,16 +5112,18 @@ window.Simili = function Simili() {
   }, /*#__PURE__*/React.createElement("style", null, `
         @import url('https://fonts.googleapis.com/css2?family=Special+Elite&display=swap');
         * { box-sizing: border-box; }
+        .simili-root { ${themeCss(0)} }
+        .simili-root.simili-dark { ${themeCss(1)} }
         @keyframes reelSpin { 0% { transform: translateY(0); } 25% { transform: translateY(-8px); } 50% { transform: translateY(0); } 75% { transform: translateY(8px); } 100% { transform: translateY(0); } }
       `), /*#__PURE__*/React.createElement("div", {
     style: {
       maxWidth: wideLayout ? twoPlayer ? 1500 : 1200 : twoPlayer ? 1000 : 800,
       margin: '0 auto',
-      background: '#fff',
-      border: '2px solid #ccc',
+      background: 'var(--c-fff)',
+      border: '2px solid var(--c-ccc)',
       borderRadius: 4,
       padding: '24px 20px',
-      boxShadow: '4px 4px 0 #ddd, 2px 2px 0 #e8e4d8',
+      boxShadow: '4px 4px 0 var(--c-ddd), 2px 2px 0 var(--c-e8e4d8)',
       position: 'relative'
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -5076,7 +5135,7 @@ window.Simili = function Simili() {
       height: 16,
       borderRadius: '50%',
       background: paperBg,
-      border: '1px solid #ccc'
+      border: '1px solid var(--c-ccc)'
     }
   }), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -5087,7 +5146,7 @@ window.Simili = function Simili() {
       height: 16,
       borderRadius: '50%',
       background: paperBg,
-      border: '1px solid #ccc'
+      border: '1px solid var(--c-ccc)'
     }
   }), /*#__PURE__*/React.createElement("h1", {
     style: {
@@ -5114,8 +5173,8 @@ window.Simili = function Simili() {
       textAlign: 'center',
       marginBottom: 12,
       padding: '8px 16px',
-      background: '#f5f0e6',
-      border: '1px solid #ddd',
+      background: 'var(--c-f5f0e6)',
+      border: '1px solid var(--c-ddd)',
       borderRadius: 6
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -5146,8 +5205,8 @@ window.Simili = function Simili() {
       alignItems: 'center',
       marginBottom: 16,
       padding: '12px 0',
-      borderTop: '1px dashed #ccc',
-      borderBottom: '1px dashed #ccc'
+      borderTop: '1px dashed var(--c-ccc)',
+      borderBottom: '1px dashed var(--c-ccc)'
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
@@ -5172,8 +5231,8 @@ window.Simili = function Simili() {
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 20,
       padding: '10px 40px',
-      background: '#2a2a2a',
-      color: '#fff',
+      background: 'var(--c-2a2a2a)',
+      color: 'var(--c-fff)',
       border: 'none',
       borderRadius: 6,
       cursor: 'pointer',
@@ -5235,7 +5294,7 @@ window.Simili = function Simili() {
     categoryLocked: idx !== cpuIdx && cpuRevealed && phase === 'choose'
   }))), phase === 'pregame' && /*#__PURE__*/React.createElement("div", {
     style: {
-      borderTop: '1px dashed #ccc',
+      borderTop: '1px dashed var(--c-ccc)',
       paddingTop: 12,
       marginTop: 8,
       display: 'flex',
@@ -5260,8 +5319,8 @@ window.Simili = function Simili() {
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 14,
       padding: '6px 20px',
-      background: '#2a2a2a',
-      color: '#fff',
+      background: 'var(--c-2a2a2a)',
+      color: 'var(--c-fff)',
       border: 'none',
       borderRadius: 4,
       cursor: 'pointer'
@@ -5271,8 +5330,8 @@ window.Simili = function Simili() {
       marginTop: 20,
       padding: 24,
       textAlign: 'center',
-      background: gameOverInfo.some(g => g.won) ? '#e8f5e9' : '#ffeaa7',
-      border: `2px solid ${gameOverInfo.some(g => g.won) ? '#27ae60' : '#f39c12'}`,
+      background: gameOverInfo.some(g => g.won) ? 'var(--c-e8f5e9)' : 'var(--c-ffeaa7)',
+      border: `2px solid ${gameOverInfo.some(g => g.won) ? 'var(--c-27ae60)' : 'var(--c-f39c12)'}`,
       borderRadius: 8
     }
   }, twoPlayer ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
@@ -5304,7 +5363,7 @@ window.Simili = function Simili() {
     style: {
       fontSize: 14,
       fontWeight: 'bold',
-      color: i === 0 ? '#2a6fdb' : '#d4442a'
+      color: i === 0 ? 'var(--c-2a6fdb)' : 'var(--c-d4442a)'
     }
   }, nameOf(i)), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -5346,22 +5405,22 @@ window.Simili = function Simili() {
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 18,
       padding: '10px 32px',
-      background: '#2a2a2a',
-      color: '#fff',
+      background: 'var(--c-2a2a2a)',
+      color: 'var(--c-fff)',
       border: 'none',
       borderRadius: 6,
       cursor: 'pointer',
       marginTop: 16,
       letterSpacing: 2
     }
-  }, matchPhase === 'sudden-death' ? 'SEE RESULT' : matchGameNum + 1 >= MATCH_GAMES ? 'SEE MATCH RESULTS' : 'NEXT GAME'), (!matchPlay || abandoned) && /*#__PURE__*/React.createElement("button", {
+  }, matchPhase === 'sudden-death' ? 'SEE RESULT' : matchGameNum + 1 >= MATCH_GAMES ? 'SEE MATCH RESULTS' : 'NEXT GAME'), !matchPlay && /*#__PURE__*/React.createElement("button", {
     onClick: handleReset,
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 18,
       padding: '10px 32px',
-      background: '#2a2a2a',
-      color: '#fff',
+      background: 'var(--c-2a2a2a)',
+      color: 'var(--c-fff)',
       border: 'none',
       borderRadius: 6,
       cursor: 'pointer',
@@ -5373,8 +5432,8 @@ window.Simili = function Simili() {
       marginTop: 20,
       padding: 24,
       textAlign: 'center',
-      background: '#e3f2fd',
-      border: '2px solid #1976d2',
+      background: 'var(--c-e3f2fd)',
+      border: '2px solid var(--c-1976d2)',
       borderRadius: 8
     }
   }, /*#__PURE__*/React.createElement("div", {
@@ -5397,12 +5456,12 @@ window.Simili = function Simili() {
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 'bold',
-      color: '#2a6fdb'
+      color: 'var(--c-2a6fdb)'
     }
   }, nameOf(0)), /*#__PURE__*/React.createElement("div", null, "Total: ", matchScores.reduce((s, g) => s + g.p1, 0))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
       fontWeight: 'bold',
-      color: '#d4442a'
+      color: 'var(--c-d4442a)'
     }
   }, nameOf(1)), /*#__PURE__*/React.createElement("div", null, "Total: ", matchScores.reduce((s, g) => s + (g.p2 || 0), 0)))) : /*#__PURE__*/React.createElement("div", null, "Running Total: ", matchScores.reduce((s, g) => s + g.p1, 0))), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -5421,8 +5480,8 @@ window.Simili = function Simili() {
       fontFamily: "'Special Elite', 'Courier New', monospace",
       fontSize: 18,
       padding: '10px 32px',
-      background: '#2a2a2a',
-      color: '#fff',
+      background: 'var(--c-2a2a2a)',
+      color: 'var(--c-fff)',
       border: 'none',
       borderRadius: 6,
       cursor: 'pointer',
@@ -5437,8 +5496,8 @@ window.Simili = function Simili() {
         marginTop: 20,
         padding: 24,
         textAlign: 'center',
-        background: matchAbandoned ? '#ffeaa7' : '#fff9c4',
-        border: `2px solid ${matchAbandoned ? '#f39c12' : '#f9a825'}`,
+        background: matchAbandoned ? 'var(--c-ffeaa7)' : 'var(--c-fff9c4)',
+        border: `2px solid ${matchAbandoned ? 'var(--c-f39c12)' : 'var(--c-f9a825)'}`,
         borderRadius: 8
       }
     }, /*#__PURE__*/React.createElement("div", {
@@ -5458,7 +5517,7 @@ window.Simili = function Simili() {
       style: {
         fontWeight: 'bold',
         fontSize: 18,
-        color: '#2a6fdb'
+        color: 'var(--c-2a6fdb)'
       }
     }, nameOf(0)), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -5473,7 +5532,7 @@ window.Simili = function Simili() {
       style: {
         fontWeight: 'bold',
         fontSize: 18,
-        color: '#d4442a'
+        color: 'var(--c-d4442a)'
       }
     }, nameOf(1)), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -5516,8 +5575,8 @@ window.Simili = function Simili() {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 16,
         padding: '8px 24px',
-        background: '#c0392b',
-        color: '#fff',
+        background: 'var(--c-c0392b)',
+        color: 'var(--c-fff)',
         border: 'none',
         borderRadius: 6,
         cursor: 'pointer'
@@ -5528,8 +5587,8 @@ window.Simili = function Simili() {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 16,
         padding: '8px 24px',
-        background: '#888',
-        color: '#fff',
+        background: 'var(--c-888)',
+        color: 'var(--c-fff)',
         border: 'none',
         borderRadius: 6,
         cursor: 'pointer'
@@ -5557,8 +5616,8 @@ window.Simili = function Simili() {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 18,
         padding: '10px 32px',
-        background: '#2a2a2a',
-        color: '#fff',
+        background: 'var(--c-2a2a2a)',
+        color: 'var(--c-fff)',
         border: 'none',
         borderRadius: 6,
         cursor: 'pointer',
@@ -5576,8 +5635,8 @@ window.Simili = function Simili() {
           marginTop: 12,
           padding: 16,
           textAlign: 'center',
-          background: '#fff3e0',
-          border: '1.5px solid #e65100',
+          background: 'var(--c-fff3e0)',
+          border: '1.5px solid var(--c-e65100)',
           borderRadius: 6
         }
       }, /*#__PURE__*/React.createElement("div", {
@@ -5598,8 +5657,8 @@ window.Simili = function Simili() {
           fontFamily: "'Special Elite', 'Courier New', monospace",
           fontSize: 16,
           padding: '8px 24px',
-          background: '#c0392b',
-          color: '#fff',
+          background: 'var(--c-c0392b)',
+          color: 'var(--c-fff)',
           border: 'none',
           borderRadius: 6,
           cursor: 'pointer'
@@ -5610,8 +5669,8 @@ window.Simili = function Simili() {
           fontFamily: "'Special Elite', 'Courier New', monospace",
           fontSize: 14,
           padding: '6px 16px',
-          background: '#888',
-          color: '#fff',
+          background: 'var(--c-888)',
+          color: 'var(--c-fff)',
           border: 'none',
           borderRadius: 6,
           cursor: 'pointer'
@@ -5623,8 +5682,8 @@ window.Simili = function Simili() {
         marginTop: 12,
         padding: 16,
         textAlign: 'center',
-        background: '#e8f5e9',
-        border: '1.5px solid #27ae60',
+        background: 'var(--c-e8f5e9)',
+        border: '1.5px solid var(--c-27ae60)',
         borderRadius: 6
       }
     }, /*#__PURE__*/React.createElement("div", {
@@ -5639,8 +5698,8 @@ window.Simili = function Simili() {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 18,
         padding: '10px 32px',
-        background: '#2a2a2a',
-        color: '#fff',
+        background: 'var(--c-2a2a2a)',
+        color: 'var(--c-fff)',
         border: 'none',
         borderRadius: 6,
         cursor: 'pointer',
@@ -5649,7 +5708,7 @@ window.Simili = function Simili() {
     }, "NEW MATCH"));
   })(), /*#__PURE__*/React.createElement("div", {
     style: {
-      borderTop: '1px dashed #ccc',
+      borderTop: '1px dashed var(--c-ccc)',
       marginTop: 12,
       paddingTop: 10,
       display: 'flex',
@@ -5664,9 +5723,9 @@ window.Simili = function Simili() {
       padding: '4px 0',
       width: 125,
       minHeight: 30,
-      background: '#fff',
-      color: '#888',
-      border: '1.5px solid #999',
+      background: 'var(--c-fff)',
+      color: 'var(--c-888)',
+      border: '1.5px solid var(--c-999)',
       borderRadius: 4,
       cursor: 'pointer',
       transition: 'all 0.15s',
@@ -5696,9 +5755,9 @@ window.Simili = function Simili() {
       }),
       style: {
         ...btnBase,
-        background: showStatistics ? '#2a2a2a' : '#fff',
-        color: showStatistics ? '#fff' : '#888',
-        border: `1.5px solid ${showStatistics ? '#2a2a2a' : '#999'}`
+        background: showStatistics ? 'var(--c-2a2a2a)' : 'var(--c-fff)',
+        color: showStatistics ? 'var(--c-fff)' : 'var(--c-888)',
+        border: `1.5px solid ${showStatistics ? 'var(--c-2a2a2a)' : 'var(--c-999)'}`
       }
     }, "\uD83D\uDCCA Statistics"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setShowSettings(prev => {
@@ -5710,9 +5769,9 @@ window.Simili = function Simili() {
       }),
       style: {
         ...btnBase,
-        background: showSettings ? '#2a2a2a' : '#fff',
-        color: showSettings ? '#fff' : '#888',
-        border: `1.5px solid ${showSettings ? '#2a2a2a' : '#999'}`
+        background: showSettings ? 'var(--c-2a2a2a)' : 'var(--c-fff)',
+        color: showSettings ? 'var(--c-fff)' : 'var(--c-888)',
+        border: `1.5px solid ${showSettings ? 'var(--c-2a2a2a)' : 'var(--c-999)'}`
       }
     }, "\u2699 Settings"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setShowGameLogs(prev => {
@@ -5725,9 +5784,9 @@ window.Simili = function Simili() {
       }),
       style: {
         ...btnBase,
-        background: showGameLogs ? '#2a2a2a' : '#fff',
-        color: showGameLogs ? '#fff' : '#888',
-        border: `1.5px solid ${showGameLogs ? '#2a2a2a' : '#999'}`
+        background: showGameLogs ? 'var(--c-2a2a2a)' : 'var(--c-fff)',
+        color: showGameLogs ? 'var(--c-fff)' : 'var(--c-888)',
+        border: `1.5px solid ${showGameLogs ? 'var(--c-2a2a2a)' : 'var(--c-999)'}`
       }
     }, "\uD83D\uDCCB Game Logs"), /*#__PURE__*/React.createElement("button", {
       onClick: gameActive ? () => {
@@ -5767,8 +5826,8 @@ window.Simili = function Simili() {
       } : undefined,
       style: {
         ...btnBase,
-        color: gameActive ? redInk : '#ccc',
-        border: `1.5px solid ${gameActive ? redInk : '#ddd'}`,
+        color: gameActive ? redInk : 'var(--c-ccc)',
+        border: `1.5px solid ${gameActive ? redInk : 'var(--c-ddd)'}`,
         cursor: gameActive ? 'pointer' : 'default',
         opacity: gameActive ? 1 : 0.5
       }
@@ -5777,8 +5836,8 @@ window.Simili = function Simili() {
     style: {
       marginTop: 8,
       padding: '12px 16px',
-      background: '#faf6ed',
-      border: '1px solid #ddd',
+      background: 'var(--c-faf6ed)',
+      border: '1px solid var(--c-ddd)',
       borderRadius: 6,
       width: '100%',
       maxWidth: 400
@@ -5793,11 +5852,20 @@ window.Simili = function Simili() {
       letterSpacing: 1
     }
   }, "Display"), /*#__PURE__*/React.createElement(ToggleSwitch, {
+    checked: darkMode,
+    onChange: setDarkMode,
+    leftLabel: "Light Mode",
+    rightLabel: "Dark Mode"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: wideLayout,
     onChange: setWideLayout,
     leftLabel: "Narrow (mobile)",
     rightLabel: "Wide (desktop)"
-  }), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 8
     }
@@ -5855,7 +5923,7 @@ window.Simili = function Simili() {
       marginTop: 14,
       textTransform: 'uppercase',
       letterSpacing: 1,
-      borderTop: '1px dashed #ddd',
+      borderTop: '1px dashed var(--c-ddd)',
       paddingTop: 10
     }
   }, "Audio"), /*#__PURE__*/React.createElement("div", {
@@ -5893,7 +5961,7 @@ window.Simili = function Simili() {
       marginTop: 14,
       textTransform: 'uppercase',
       letterSpacing: 1,
-      borderTop: '1px dashed #ddd',
+      borderTop: '1px dashed var(--c-ddd)',
       paddingTop: 10
     }
   }, "Gameplay ", phase !== 'pregame' && /*#__PURE__*/React.createElement("span", {
@@ -5965,8 +6033,8 @@ window.Simili = function Simili() {
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
     checked: hintsOn,
     onChange: setHintsOn,
-    leftLabel: "Hints Off",
-    rightLabel: "Hints On"
+    leftLabel: "Game Hints Off",
+    rightLabel: "Game Hints On"
   })))), showGameLogs && (() => {
     // Group game logs into pages:
     // - Match regular games: grouped by logGroupId, non-SD, up to 4 per page
@@ -6014,11 +6082,11 @@ window.Simili = function Simili() {
       style: {
         marginTop: 8,
         padding: '12px 16px',
-        background: '#faf6ed',
-        border: '1px solid #ddd',
+        background: 'var(--c-faf6ed)',
+        border: '1px solid var(--c-ddd)',
         borderRadius: 6,
         width: '100%',
-        maxWidth: 600
+        maxWidth: 5 * 125 + 4 * 6
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -6047,9 +6115,9 @@ window.Simili = function Simili() {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 13,
         padding: '1px 8px',
-        background: '#fff',
-        color: '#888',
-        border: '1.5px solid #999',
+        background: 'var(--c-fff)',
+        color: 'var(--c-888)',
+        border: '1.5px solid var(--c-999)',
         borderRadius: 4,
         cursor: 'pointer'
       }
@@ -6064,9 +6132,9 @@ window.Simili = function Simili() {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 13,
         padding: '1px 8px',
-        background: '#fff',
-        color: '#888',
-        border: '1.5px solid #999',
+        background: 'var(--c-fff)',
+        color: 'var(--c-888)',
+        border: '1.5px solid var(--c-999)',
         borderRadius: 4,
         cursor: 'pointer'
       }
@@ -6091,7 +6159,7 @@ window.Simili = function Simili() {
         style: {
           marginBottom: li < activePage.length - 1 ? 12 : 0,
           paddingBottom: li < activePage.length - 1 ? 12 : 0,
-          borderBottom: li < activePage.length - 1 ? '1px dashed #ddd' : 'none'
+          borderBottom: li < activePage.length - 1 ? '1px dashed var(--c-ddd)' : 'none'
         }
       }, /*#__PURE__*/React.createElement("div", {
         style: {
@@ -6105,7 +6173,7 @@ window.Simili = function Simili() {
           fontSize: 11,
           opacity: 0.6
         }
-      }, ' ', "(", [log.settings.quadBonus ? 'Quad Bonus On' : 'Quad Bonus Off', log.settings.classicMode ? 'Classic' : 'Modern', log.settings.laxPlacement ? 'Lax Pl.' : 'Strict Pl.', ...(log.settings.hintsOn ? ['Hints On'] : [])].join(', '), ")"), log.abandoned ? ' (Abandoned)' : '', " \u2014 ", log.players.map((p, pi) => {
+      }, ' ', "(", [log.settings.classicMode ? 'Classic Ver.' : 'Modern Ver.', log.settings.quadBonus ? 'Quad B. On' : 'Quad B. Off', log.settings.laxPlacement ? 'Lax Pl.' : 'Strict Pl.', log.settings.hintsOn ? 'Hints On' : 'Hints Off'].join(', '), ")"), log.isSeeded || log.abandoned ? ` (${[log.isSeeded && 'Seeded', log.abandoned && 'Abandoned'].filter(Boolean).join(', ')})` : '', " \u2014 ", log.players.map((p, pi) => {
         // CPU: the computer's sheet (Player 2 against you, or the only player)
         const isCpu = log.settings.computerPlayer && pi === (log.settings.twoPlayer ? 1 : 0);
         const label = isCpu ? 'CPU: ' : `P${pi + 1}: `;
@@ -6163,7 +6231,7 @@ window.Simili = function Simili() {
         }
       }))), /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
         style: {
-          borderBottom: '1px solid #ddd'
+          borderBottom: '1px solid var(--c-ddd)'
         }
       }, /*#__PURE__*/React.createElement("th", {
         style: {
@@ -6224,7 +6292,7 @@ window.Simili = function Simili() {
       }, "Booked"))), /*#__PURE__*/React.createElement("tbody", null, log.rounds.map((rd, ri) => /*#__PURE__*/React.createElement("tr", {
         key: ri,
         style: {
-          borderBottom: '1px solid #f0ebe0'
+          borderBottom: '1px solid var(--c-f0ebe0)'
         }
       }, /*#__PURE__*/React.createElement("td", {
         style: {
@@ -6296,11 +6364,11 @@ window.Simili = function Simili() {
       style: {
         marginTop: 8,
         padding: '12px 16px',
-        background: '#faf6ed',
-        border: '1px solid #ddd',
+        background: 'var(--c-faf6ed)',
+        border: '1px solid var(--c-ddd)',
         borderRadius: 6,
         width: '100%',
-        maxWidth: 600
+        maxWidth: 5 * 125 + 4 * 6
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -6329,9 +6397,9 @@ window.Simili = function Simili() {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 13,
         padding: '1px 8px',
-        background: '#fff',
-        color: '#888',
-        border: '1.5px solid #999',
+        background: 'var(--c-fff)',
+        color: 'var(--c-888)',
+        border: '1.5px solid var(--c-999)',
         borderRadius: 4,
         cursor: 'pointer'
       }
@@ -6346,9 +6414,9 @@ window.Simili = function Simili() {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 13,
         padding: '1px 8px',
-        background: '#fff',
-        color: '#888',
-        border: '1.5px solid #999',
+        background: 'var(--c-fff)',
+        color: 'var(--c-888)',
+        border: '1.5px solid var(--c-999)',
         borderRadius: 4,
         cursor: 'pointer'
       }
@@ -6377,14 +6445,14 @@ window.Simili = function Simili() {
       const finishedGames = ks => ks.reduce((t, k) => t + gameStats[k].p1.gamesFinished, 0);
       const thStyle = {
         padding: '4px 6px',
-        borderBottom: '1.5px solid #999',
+        borderBottom: '1.5px solid var(--c-999)',
         textAlign: 'right',
         fontWeight: 'bold',
         fontSize: 10
       };
       const tdStyle = {
         padding: '3px 6px',
-        borderBottom: '1px solid #eee',
+        borderBottom: '1px solid var(--c-eee)',
         textAlign: 'right',
         fontSize: 10
       };
@@ -6502,13 +6570,13 @@ window.Simili = function Simili() {
       const rows = [['Rolls', rollStats.rolls, g > 0 ? '10.00' : '—'], ['Triples (000~999)', rollStats.triples, perGame(rollStats.triples)], ['Doubles (00~99)', rollStats.doubles, perGame(rollStats.doubles)], ['Step Doubles (001~998)', rollStats.stepDoubles, perGame(rollStats.stepDoubles)], ['Solid Runs (012~987)', rollStats.solidRuns, perGame(rollStats.solidRuns)], ['Broken Runs (013~986)', rollStats.brokenRuns, perGame(rollStats.brokenRuns)], ...digitNames.map((name, i) => [name, rollStats.digitCounts[i], perGame(rollStats.digitCounts[i])]), ...(extendedStats ? posNames.flatMap((pos, pi) => digitNames.map((name, di) => [`${name} in ${pos} Place`, (rollStats.positionCounts || [])[pi * 10 + di] || 0, perGame((rollStats.positionCounts || [])[pi * 10 + di] || 0)])) : [])];
       const thStyle = {
         padding: '4px 6px',
-        borderBottom: '1.5px solid #999',
+        borderBottom: '1.5px solid var(--c-999)',
         textAlign: 'right',
         fontWeight: 'bold'
       };
       const tdStyle = {
         padding: '4px 6px',
-        borderBottom: '1px solid #eee',
+        borderBottom: '1px solid var(--c-eee)',
         textAlign: 'right'
       };
       const tdLabelStyle = {
@@ -6520,8 +6588,8 @@ window.Simili = function Simili() {
         style: {
           marginBottom: 10,
           padding: '8px 10px',
-          background: '#f0ebe0',
-          border: '1px dashed #ccc',
+          background: 'var(--c-f0ebe0)',
+          border: '1px dashed var(--c-ccc)',
           borderRadius: 4,
           fontSize: 10,
           wordBreak: 'break-all',
@@ -6867,14 +6935,14 @@ window.Simili = function Simili() {
       };
       const thStyle = {
         padding: '4px 6px',
-        borderBottom: '1.5px solid #999',
+        borderBottom: '1.5px solid var(--c-999)',
         textAlign: 'right',
         fontWeight: 'bold',
         fontSize: 10
       };
       const tdStyle = {
         padding: '3px 6px',
-        borderBottom: '1px solid #eee',
+        borderBottom: '1px solid var(--c-eee)',
         textAlign: 'right',
         fontSize: 10
       };

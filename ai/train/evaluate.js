@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Plays whole games with the computer player and with a simple greedy player on the
-// same dice, and reports how often each reaches 100.
+// same dice, and reports how often each reaches 100 (and how much each uses Ladders).
 //
 //   node ai/train/evaluate.js [--games 200] [--model ai/model.json] [--catRolls 0] [--workers <cores>] [--classic 0]
+//     [--recheckAll 1] [--margins 1] [--from 0]   (0 / 0: re-check on 8 random rolls in every round, no tie margins, as before)
 //
 // catRolls: 0 = category choice over all 220 rolls (as in play); n = a sample of n rolls (faster).
 'use strict';
@@ -10,7 +11,7 @@ const fs = require('fs'), path = require('path'), os = require('os');
 const { Worker } = require('worker_threads');
 const { mulberry } = require('./mlp.js');
 
-const args = { games: 200, model: path.join(__dirname, '..', 'model.json'), catRolls: 0, workers: os.cpus().length, classic: 0, seed: 99, greedy: 1, top: 6, recheckRolls: 8 };
+const args = { games: 200, model: path.join(__dirname, '..', 'model.json'), catRolls: 0, workers: os.cpus().length, classic: 0, seed: 99, greedy: 1, top: 6, recheckRolls: 8, recheckAll: 1, margins: 1, from: 0 };
 const v = process.argv.slice(2);
 for (let i = 0; i < v.length; i++) { const k = v[i].replace(/^--/, ''); if (!(k in args)) { console.error('unknown option --' + k); process.exit(1); } args[k] = k === 'model' ? v[++i] : +v[++i]; }
 const model = JSON.parse(fs.readFileSync(args.model, 'utf8'));
@@ -38,7 +39,8 @@ function runAll(jobs, onEach) {
   const jobs = [];
   for (let g = 0; g < args.games; g++) {
     const rolls = Array.from({ length: 10 }, () => [0, 1, 2].map(() => Math.floor(rand() * 10)));
-    for (const policy of args.greedy ? ['ai', 'greedy'] : ['ai']) jobs.push({ type: 'evalGame', rolls, classic: !!args.classic, policy, modelId: policy === 'ai' ? 'eval' : 'none', catRolls: args.catRolls || 0, recheck: args.top ? { top: args.top, rolls: args.recheckRolls } : null });
+    if (g < args.from) continue;   // --from n: only games n.. (the same dice as a full run)
+    for (const policy of args.greedy ? ['ai', 'greedy'] : ['ai']) jobs.push({ type: 'evalGame', rolls, classic: !!args.classic, policy, modelId: policy === 'ai' ? 'eval' : 'none', catRolls: args.catRolls || 0, recheck: args.top ? { top: args.top, rolls: args.recheckRolls, all: !!args.recheckAll } : null, margins: args.margins ? null : false });
   }
   const t0 = Date.now();
   const tally = { ai: [], greedy: [] };
@@ -54,5 +56,7 @@ function runAll(jobs, onEach) {
   console.log(`computer: booked nothing in round 1 in ${ai.filter(x => x.round1Booked === 0).length} of ${ai.length} games`);
   if (est.length) console.log(`computer's own estimate at the start of round 2: ${(100 * est.reduce((a, x) => a + x.estimateRound2, 0) / est.length).toFixed(1)}% on average; actual wins ${(100 * ai.filter(x => x.win).length / ai.length).toFixed(1)}%`);
   console.log(`Quad: computer ${ai.filter(x => x.quad).length}/${ai.length}` + (tally.greedy.length ? `, greedy ${tally.greedy.filter(x => x.quad).length}/${tally.greedy.length}` : ''));
+  const lad = list => `Ladder in ${list.filter(x => x.ladUsed > 0).length}/${list.length} games, ${list.reduce((a, x) => a + (x.ladDone || 0), 0)} complete Ladder rows (${(list.reduce((a, x) => a + (x.ladDone || 0), 0) / list.length).toFixed(2)} a game)`;
+  console.log(`Ladder: computer ${lad(ai)}` + (tally.greedy.length ? ` | greedy ${lad(tally.greedy)}` : ''));
   for (const w of pool) w.terminate();
 })().catch(e => { console.error(e); process.exit(1); });

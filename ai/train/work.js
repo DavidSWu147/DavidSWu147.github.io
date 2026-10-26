@@ -227,7 +227,10 @@ function evalGame(rolls, classic, policy, model, modelId, catRolls, recheck, mar
     st = S.makeState(rows, bank, uA, uB);
   }
   const score = S.terminalScore(st.rows, classic);
-  return { score, win: score >= 100, quad: S.hasQuad(st.rows), ...info };
+  // Ladder use (does it play LM as well as SM?): rows with any digit, rows complete (20)
+  let ladUsed = 0, ladDone = 0;
+  for (let i = 10; i < 15; i++) { if (st.rows[i] !== EMPTY) ladUsed++; if (S.SCORE[S.LAD][st.rows[i]] >= 20) ladDone++; }
+  return { score, win: score >= 100, quad: S.hasQuad(st.rows), ladUsed, ladDone, ...info };
 }
 
 function handle(msg) {
