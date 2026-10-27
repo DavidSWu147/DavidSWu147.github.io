@@ -2313,7 +2313,8 @@ function NextRoundPreview({
   classicMode,
   laxPlacement,
   redInk,
-  autoRun
+  autoRun,
+  forComputer
 }) {
   const nextRound = round + 2; // round is 0-based; this previews the start of the next round
   const roundsLeft = TOTAL_ROUNDS - 1 - round;
@@ -2450,7 +2451,7 @@ function NextRoundPreview({
       fontSize: 11,
       opacity: 0.6
     }
-  }, result && !stale ? `Round ${nextRound} odds if you end the round now` : stale ? 'Booking changed since the last preview' : 'Nothing is committed until you end the round')), result && /*#__PURE__*/React.createElement("div", {
+  }, forComputer ? `Round ${nextRound} odds after its booking` : result && !stale ? `Round ${nextRound} odds if you end the round now` : stale ? 'Booking changed since the last preview' : 'Nothing is committed until you end the round')), result && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6,
@@ -2551,117 +2552,143 @@ function PlayerSheet({
   // the computer's category: hidden (buttons, none highlighted) until you reveal it or roll
   const cpuShown = !!(computer && ps.chosenCategory && !computer.hideCategory);
   const playerColor = playerIdx === 0 ? 'var(--c-2a6fdb)' : 'var(--c-d4442a)';
-  return /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      minWidth: 0,
-      border: twoPlayer ? '2px solid var(--c-ddd)' : 'none',
-      borderRadius: twoPlayer ? 8 : 0,
-      padding: twoPlayer ? '12px 10px' : 0,
-      background: twoPlayer ? 'var(--c-fefcf6)' : 'transparent'
-    }
-  }, playerLabel && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 18,
-      fontWeight: 'bold',
-      textAlign: 'center',
-      marginBottom: 8,
-      color: playerColor
-    }
-  }, playerLabel, ps.roundDone && (phase === 'book' || phase === 'endgame-bonus') && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 12,
-      fontWeight: 'normal',
-      opacity: 0.6,
-      marginLeft: 8
-    }
-  }, "\u2713 Done")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      textAlign: 'center',
-      marginBottom: 12
-    }
-  }, /*#__PURE__*/React.createElement(ScoreTrack, {
-    score: rawScore,
-    bonusIII: seqBonusIII,
-    crossOut: crossOut,
-    quadBonusPoints: phase === 'gameover' && currentScore >= 100 && quadBonus && hasQuadBonus(grids, laxPlacement) ? 1 : 0
-  }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 16,
-      fontWeight: 'bold'
-    }
-  }, "Score: ", currentScore + (phase === 'gameover' && quadBonus && hasQuadBonus(grids, laxPlacement) ? 1 : 0), " / 100")), (phase === 'choose' || phase === 'book' || phase === 'rolling' || phase === 'endgame-bonus' || phase === 'gameover') && (ps.chosenCategory || computer && phase === 'choose') && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 12
-    }
-  }, phase !== 'endgame-bonus' && phase !== 'gameover' && /*#__PURE__*/React.createElement(React.Fragment, null, phase === 'choose' && !computer && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      lineHeight: '18px',
-      marginBottom: 6,
-      textAlign: 'center'
-    }
-  }, "Choose your category:"), phase === 'choose' && computer && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      lineHeight: '18px',
-      marginBottom: 6,
-      textAlign: 'center'
-    }
-  }, cpuShown ? "Computer's choice:" : ps.chosenCategory ? 'Category chosen ✓ (clicking Reveal locks own category)' : computer.status || 'Choosing a category…'), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      justifyContent: 'center'
-    }
-  }, computer && computer.canReveal && ps.chosenCategory && !cpuShown ? /*#__PURE__*/React.createElement("button", {
-    onClick: computer.onReveal,
-    title: "Show the computer's category (your category is then locked)",
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 16,
-      lineHeight: '20px',
-      padding: '6px 16px',
-      background: 'var(--c-fff)',
-      color: 'var(--c-2a2a2a)',
-      border: '2px solid var(--c-2a2a2a)',
-      borderRadius: 4,
-      cursor: 'pointer'
-    }
-  }, "Reveal") : ['sequence', 'matching', 'ladder'].map(cat => {
-    const on = ps.chosenCategory === cat && (!computer || cpuShown);
-    const clickable = phase === 'choose' && !computer && !categoryLocked;
-    return /*#__PURE__*/React.createElement("button", {
-      key: cat,
-      onClick: clickable ? () => onUpdatePlayer(playerIdx, {
-        chosenCategory: ps.chosenCategory === cat ? null : cat
-      }) : undefined,
+  return (
+    /*#__PURE__*/
+    // a column: the sheet on top, and the next round's odds and the Sequence Bonus track at the
+    // bottom (marginTop auto), so side-by-side sheets line those up whatever is above them
+    React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        border: twoPlayer ? '2px solid var(--c-ddd)' : 'none',
+        borderRadius: twoPlayer ? 8 : 0,
+        padding: twoPlayer ? '12px 10px' : 0,
+        background: twoPlayer ? 'var(--c-fefcf6)' : 'transparent'
+      }
+    }, /*#__PURE__*/React.createElement("div", null, playerLabel && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        textAlign: 'center',
+        marginBottom: 8,
+        color: playerColor
+      }
+    }, playerLabel, ps.roundDone && (phase === 'book' || phase === 'endgame-bonus') && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12,
+        fontWeight: 'normal',
+        opacity: 0.6,
+        marginLeft: 8
+      }
+    }, "\u2713 Done")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        textAlign: 'center',
+        marginBottom: 12
+      }
+    }, /*#__PURE__*/React.createElement(ScoreTrack, {
+      score: rawScore,
+      bonusIII: seqBonusIII,
+      crossOut: crossOut,
+      quadBonusPoints: phase === 'gameover' && currentScore >= 100 && quadBonus && hasQuadBonus(grids, laxPlacement) ? 1 : 0
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 16,
+        fontWeight: 'bold'
+      }
+    }, "Score: ", currentScore + (phase === 'gameover' && quadBonus && hasQuadBonus(grids, laxPlacement) ? 1 : 0), " / 100")), (phase === 'choose' || phase === 'book' || phase === 'rolling' || phase === 'endgame-bonus' || phase === 'gameover') && (ps.chosenCategory || computer && phase === 'choose') && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 12
+      }
+    }, phase !== 'endgame-bonus' && phase !== 'gameover' && /*#__PURE__*/React.createElement(React.Fragment, null, phase === 'choose' && !computer && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14,
+        lineHeight: '18px',
+        marginBottom: 6,
+        textAlign: 'center'
+      }
+    }, "Choose your category:"), phase === 'choose' && computer && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 14,
+        lineHeight: '18px',
+        marginBottom: 6,
+        textAlign: 'center'
+      }
+    }, cpuShown ? "Computer's choice:" : ps.chosenCategory ? 'Category chosen ✓ (clicking Reveal locks own category)' : computer.status || 'Choosing a category…'), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'center'
+      }
+    }, computer && computer.canReveal && ps.chosenCategory && !cpuShown ? /*#__PURE__*/React.createElement("button", {
+      onClick: computer.onReveal,
+      title: "Show the computer's category (your category is then locked)",
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 16,
         lineHeight: '20px',
         padding: '6px 16px',
-        background: on ? 'var(--c-2a2a2a)' : 'var(--c-fff)',
-        color: on ? 'var(--c-fff)' : 'var(--c-2a2a2a)',
+        background: 'var(--c-fff)',
+        color: 'var(--c-2a2a2a)',
         border: '2px solid var(--c-2a2a2a)',
         borderRadius: 4,
-        cursor: clickable ? 'pointer' : 'default',
-        transition: 'all 0.15s',
-        opacity: phase !== 'choose' && ps.chosenCategory !== cat ? 0.4 : 1
+        cursor: 'pointer'
       }
-    }, cat[0].toUpperCase());
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      lineHeight: '16px',
-      textAlign: 'center',
-      marginTop: 4,
-      opacity: 0.6
-    }
-  }, ps.chosenCategory && (!computer || cpuShown) ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 2 && hintsOn && ps.chosenCategory && (!computer || cpuShown) && typeof SimiliSolver !== 'undefined' && (() => {
-    const c = round9Odds && round9Odds.result ? round9Odds.result.categories.find(x => x.category === ps.chosenCategory) : null;
-    if (!c) {
-      const pct = round9Odds ? Math.round((round9Odds.progress || 0) * 100) : 0;
+    }, "Reveal") : ['sequence', 'matching', 'ladder'].map(cat => {
+      const on = ps.chosenCategory === cat && (!computer || cpuShown);
+      const clickable = phase === 'choose' && !computer && !categoryLocked;
+      return /*#__PURE__*/React.createElement("button", {
+        key: cat,
+        onClick: clickable ? () => onUpdatePlayer(playerIdx, {
+          chosenCategory: ps.chosenCategory === cat ? null : cat
+        }) : undefined,
+        style: {
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          fontSize: 16,
+          lineHeight: '20px',
+          padding: '6px 16px',
+          background: on ? 'var(--c-2a2a2a)' : 'var(--c-fff)',
+          color: on ? 'var(--c-fff)' : 'var(--c-2a2a2a)',
+          border: '2px solid var(--c-2a2a2a)',
+          borderRadius: 4,
+          cursor: clickable ? 'pointer' : 'default',
+          transition: 'all 0.15s',
+          opacity: phase !== 'choose' && ps.chosenCategory !== cat ? 0.4 : 1
+        }
+      }, cat[0].toUpperCase());
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        lineHeight: '16px',
+        textAlign: 'center',
+        marginTop: 4,
+        opacity: 0.6
+      }
+    }, ps.chosenCategory && (!computer || cpuShown) ? `${ps.chosenCategory.charAt(0).toUpperCase() + ps.chosenCategory.slice(1)} selected` : 'S = Sequence · M = Matching · L = Ladder')), round === TOTAL_ROUNDS - 2 && hintsOn && ps.chosenCategory && (!computer || cpuShown) && typeof SimiliSolver !== 'undefined' && (() => {
+      const c = round9Odds && round9Odds.result ? round9Odds.result.categories.find(x => x.category === ps.chosenCategory) : null;
+      if (!c) {
+        const pct = round9Odds ? Math.round((round9Odds.progress || 0) * 100) : 0;
+        return /*#__PURE__*/React.createElement("div", {
+          style: {
+            textAlign: 'center',
+            marginTop: 6
+          }
+        }, /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: 16,
+            opacity: 0.35
+          }
+        }, "\u2026"), /*#__PURE__*/React.createElement("div", {
+          style: {
+            fontSize: 12,
+            opacity: 0.6,
+            marginTop: 2
+          }
+        }, `calculating win chances · ${pct}%`));
+      }
+      const isZero = c.winPct === 0,
+        isFull = c.winPct === 100;
       return /*#__PURE__*/React.createElement("div", {
         style: {
           textAlign: 'center',
@@ -2670,498 +2697,320 @@ function PlayerSheet({
       }, /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 16,
-          opacity: 0.35
+          fontWeight: isZero || isFull ? 'bold' : 'normal',
+          color: isZero ? redInk : isFull ? 'var(--c-27ae60)' : 'var(--c-2a2a2a)'
         }
-      }, "\u2026"), /*#__PURE__*/React.createElement("div", {
+      }, isFull ? '100%' : isZero ? '0%' : c.winPctExact + '%'), /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 12,
-          opacity: 0.6,
+          opacity: 0.7,
           marginTop: 2
         }
-      }, `calculating win chances · ${pct}%`));
-    }
-    const isZero = c.winPct === 0,
-      isFull = c.winPct === 100;
-    return /*#__PURE__*/React.createElement("div", {
+      }, "to win", !isZero && c.pointsIfWin !== null && c.pointsIfWin !== 100 ? ` (${c.pointsIfWinText})` : ''));
+    })(), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (!computer || cpuShown) && (() => {
+      const info = winChances[ps.chosenCategory];
+      if (!info) return null;
+      const pct = info.winPct;
+      const isZero = pct === 0;
+      const isFull = pct === 100;
+      const pctStr = isFull ? '100%' : isZero ? '0%' : pct.toFixed(1) + '%';
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          textAlign: 'center',
+          marginTop: 6
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 16,
+          fontWeight: isZero || isFull ? 'bold' : 'normal',
+          color: isZero ? redInk : isFull ? 'var(--c-27ae60)' : 'var(--c-2a2a2a)'
+        }
+      }, pctStr), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 12,
+          opacity: 0.7,
+          marginTop: 2
+        }
+      }, !isZero && !isFull && info.outs ? info.outs + ' ' : '', "to win", !isZero && info.pointsIfWinText ? ` (${info.pointsIfWinText})` : ''));
+    })()), phase === 'choose' && !ps.chosenCategory && !computer && /*#__PURE__*/React.createElement("div", {
       style: {
-        textAlign: 'center',
-        marginTop: 6
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 16,
-        fontWeight: isZero || isFull ? 'bold' : 'normal',
-        color: isZero ? redInk : isFull ? 'var(--c-27ae60)' : 'var(--c-2a2a2a)'
-      }
-    }, isFull ? '100%' : isZero ? '0%' : c.winPctExact + '%'), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        opacity: 0.7,
-        marginTop: 2
-      }
-    }, "to win", !isZero && c.pointsIfWin !== null && c.pointsIfWin !== 100 ? ` (${c.pointsIfWinText})` : ''));
-  })(), round === TOTAL_ROUNDS - 1 && winChances && ps.chosenCategory && (!computer || cpuShown) && (() => {
-    const info = winChances[ps.chosenCategory];
-    if (!info) return null;
-    const pct = info.winPct;
-    const isZero = pct === 0;
-    const isFull = pct === 100;
-    const pctStr = isFull ? '100%' : isZero ? '0%' : pct.toFixed(1) + '%';
-    return /*#__PURE__*/React.createElement("div", {
-      style: {
-        textAlign: 'center',
-        marginTop: 6
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 16,
-        fontWeight: isZero || isFull ? 'bold' : 'normal',
-        color: isZero ? redInk : isFull ? 'var(--c-27ae60)' : 'var(--c-2a2a2a)'
-      }
-    }, pctStr), /*#__PURE__*/React.createElement("div", {
-      style: {
-        fontSize: 12,
-        opacity: 0.7,
-        marginTop: 2
-      }
-    }, !isZero && !isFull && info.outs ? info.outs + ' ' : '', "to win", !isZero && info.pointsIfWinText ? ` (${info.pointsIfWinText})` : ''));
-  })()), phase === 'choose' && !ps.chosenCategory && !computer && /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 14,
-      lineHeight: '18px',
-      marginBottom: 6,
-      textAlign: 'center'
-    }
-  }, "Choose your category:"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 8,
-      justifyContent: 'center'
-    }
-  }, ['sequence', 'matching', 'ladder'].map(cat => /*#__PURE__*/React.createElement("button", {
-    key: cat,
-    onClick: () => onUpdatePlayer(playerIdx, {
-      chosenCategory: cat
-    }),
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 16,
-      lineHeight: '20px',
-      padding: '6px 16px',
-      background: 'var(--c-fff)',
-      color: 'var(--c-2a2a2a)',
-      border: '2px solid var(--c-2a2a2a)',
-      borderRadius: 4,
-      cursor: 'pointer',
-      transition: 'all 0.15s'
-    }
-  }, cat[0].toUpperCase()))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      lineHeight: '16px',
-      textAlign: 'center',
-      marginTop: 4,
-      opacity: 0.6
-    }
-  }, "S = Sequence \xB7 M = Matching \xB7 L = Ladder")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 12,
-      flexWrap: 'wrap'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: '0 0 auto'
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 'bold',
-      marginBottom: 4
-    }
-  }, "Bank"), Array.from({
-    length: TOTAL_ROUNDS
-  }, (_, r) => {
-    const roundDigits = bank.filter(b => b.round === r);
-    const startIdx = bank.indexOf(roundDigits[0]);
-    const history = roundHistory[r];
-    return /*#__PURE__*/React.createElement("div", {
-      key: r,
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 3,
-        marginBottom: 1,
-        opacity: r > round ? 0.3 : 1
-      }
-    }, /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 12,
-        width: 18,
-        textAlign: 'right'
-      }
-    }, r + 1, "."), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        width: 12,
-        textAlign: 'center',
-        textDecoration: history ? 'underline' : 'none',
-        fontWeight: history ? 'bold' : 'normal'
-      }
-    }, r < round && history ? ps.chosenCategory && r === round ? ps.chosenCategory[0].toUpperCase() : roundHistory[r] ? roundHistory[r].categories?.[playerIdx]?.[0]?.toUpperCase() || '·' : '·' : r === round && ps.chosenCategory && (!computer || cpuShown) ? ps.chosenCategory[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 1,
-        minWidth: 94
-      }
-    }, roundDigits.length > 0 ? roundDigits.map((b, i) => {
-      const globalIdx = startIdx + i;
-      return /*#__PURE__*/React.createElement(BankDigit, {
-        key: i,
-        digit: b.digit,
-        used: ps.bankUsed[globalIdx],
-        selected: ps.selectedBankIndices.includes(globalIdx),
-        selectable: canSelectBank && !ps.bankUsed[globalIdx],
-        onClick: () => onToggleBankSelection(playerIdx, globalIdx),
-        crossOut: crossOut
-      });
-    }) : /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        opacity: 0.3,
-        lineHeight: '32px'
-      }
-    }, "\xB7 \xB7 \xB7")));
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 12,
-      flex: 1,
-      minWidth: 0,
-      flexDirection: verticalCategories ? 'column' : 'row'
-    }
-  }, ['sequence', 'matching', 'ladder'].map(cat => {
-    const catLabel = cat.charAt(0).toUpperCase() + cat.slice(1);
-    const scoreInfo = cat === 'sequence' ? 'XYZ=10 / WXYZ=15' : cat === 'matching' ? 'XXX=15 / XXXX=20' : 'XXYY=20 (Y=X±1)';
-    const canBookHere = phase === 'book' && !ps.roundDone && ps.chosenCategory === cat || ps.bonusBookPhase && !ps.roundDone && bonusBookCategories.includes(cat) || phase === 'endgame-bonus' && ps.bonusBookPhase && !ps.roundDone && bonusBookCategories.includes(cat);
-    return /*#__PURE__*/React.createElement("div", {
-      key: cat,
-      style: {
-        flex: 1,
-        minWidth: 0
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        marginBottom: 3
+        marginBottom: 12
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 14,
-        fontWeight: 'bold',
-        fontStyle: 'italic'
+        lineHeight: '18px',
+        marginBottom: 6,
+        textAlign: 'center'
       }
-    }, catLabel), /*#__PURE__*/React.createElement("div", {
+    }, "Choose your category:"), /*#__PURE__*/React.createElement("div", {
       style: {
-        fontSize: 10,
-        opacity: 0.5
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'center'
       }
-    }, scoreInfo)), grids[cat].map((row, rowIdx) => {
-      const rowScore = scoreRow(cat, row, laxPlacement);
-      const scoringCells = (() => {
-        if (rowScore === 0) return new Set();
-        if (cat === 'ladder') return new Set(row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1));
-        if (cat === 'matching') {
-          const filled = row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
-          if (rowScore === 20) return new Set(filled);
-          if (laxPlacement) return new Set(filled);
-          for (let start = 0; start <= filled.length - 3; start++) {
-            const group = filled.slice(start, start + 3);
-            if (group[2] - group[0] === 2) return new Set(group);
-          }
-          return new Set();
-        }
-        if (cat === 'sequence') {
-          const filled = row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
-          if (rowScore === 15 && filled.length === 4) return new Set(filled);
-          for (let start = 0; start <= filled.length - 3; start++) {
-            const group = filled.slice(start, start + 3);
-            if (group[2] - group[0] === 2) {
-              const digits = group.map(i => row[i]);
-              if (isValidSequence(digits)) return new Set(group);
-            }
-          }
-          return new Set();
-        }
-        return new Set();
-      })();
-      const selectedDigit = ps.selectedBankIndices.length === 1 ? bank[ps.selectedBankIndices[0]].digit : null;
-      const canPlaceInCell = colIdx => {
-        if (!canBookHere || row[colIdx] !== null || selectedDigit === null) return false;
-        if (cat === 'sequence') {
-          const existing = row.map((d, i) => d !== null ? {
-            digit: d,
-            pos: i
-          } : null).filter(Boolean);
-          return canExtendSequence(existing, selectedDigit, colIdx);
-        } else if (cat === 'matching') {
-          const existing = row.filter(c => c !== null);
-          return existing.length === 0 || existing[0] === selectedDigit;
-        } else if (cat === 'ladder') {
-          const newRow = [...row];
-          newRow[colIdx] = selectedDigit;
-          return laxPlacement ? isValidLaxLadderPlacement(newRow) : isValidLadderPlacement(newRow);
-        }
-        return true;
-      };
-      const rowHints = cellHints ? getCellHints(cat, row, laxPlacement) : null;
-      return /*#__PURE__*/React.createElement("div", {
-        key: rowIdx,
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 2,
-          marginBottom: 2
-        }
-      }, row.map((cell, colIdx) => /*#__PURE__*/React.createElement(GridCell, {
-        key: colIdx,
-        value: cell,
-        clickable: canPlaceInCell(colIdx),
-        highlight: scoringCells.has(colIdx),
-        hinted: phase === 'book' && !ps.roundDone && !!ps.hint && ps.hint.cells.includes(`${cat}-${rowIdx}-${colIdx}`),
-        onClick: () => onBookDigit(playerIdx, cat, rowIdx, colIdx),
-        hints: rowHints ? rowHints[colIdx] : null
-      })), rowScore > 0 && /*#__PURE__*/React.createElement("span", {
-        style: {
-          fontSize: 12,
-          fontWeight: 'bold',
-          color: redInk,
-          marginLeft: 3
-        }
-      }, "+", rowScore));
-    }));
-  }))), (phase === 'book' || phase === 'endgame-bonus' && ps.bonusBookPhase) && !ps.roundDone && /*#__PURE__*/React.createElement("div", {
-    style: {
-      borderTop: '1px dashed var(--c-ccc)',
-      paddingTop: 8,
-      marginTop: 6
-    }
-  }, !ps.bonusBookPhase && phase === 'book' && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      marginBottom: 6
-    }
-  }, /*#__PURE__*/React.createElement("strong", null, "Booking into ", ps.chosenCategory?.charAt(0).toUpperCase() + ps.chosenCategory?.slice(1)), ' · ', ps.bookingsThisRound, " / ", ps.maxBooking, " booked"), ps.bonusBookPhase && /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 12,
-      marginBottom: 6,
-      color: redInk
-    }
-  }, /*#__PURE__*/React.createElement("strong", null, "\uD83C\uDF81 Bonus Book!"), " Place 1 digit into ", bonusBookCategories.length === 3 ? 'any category' : 'Sequence', ".", /*#__PURE__*/React.createElement("button", {
-    onClick: () => onEndBonusBook(playerIdx),
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 11,
-      marginLeft: 6,
-      padding: '2px 6px',
-      background: 'var(--c-eee)',
-      border: '1px solid var(--c-ccc)',
-      borderRadius: 3,
-      cursor: 'pointer'
-    }
-  }, "Cancel")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 6,
-      flexWrap: 'wrap',
-      alignItems: 'center'
-    }
-  }, !ps.bonusBookPhase && phase === 'book' && !computer && /*#__PURE__*/React.createElement(React.Fragment, null, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
-    onClick: () => onUseBonusBook(playerIdx, 'A'),
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 12,
-      padding: '4px 10px',
-      background: 'var(--c-fffde6)',
-      border: '1.5px solid var(--c-b8860b)',
-      borderRadius: 4,
-      cursor: 'pointer',
-      color: 'var(--c-8b6914)'
-    }
-  }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && /*#__PURE__*/React.createElement("button", {
-    onClick: () => onUseBonusBook(playerIdx, 'B'),
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 12,
-      padding: '4px 10px',
-      background: 'var(--c-fffde6)',
-      border: '1.5px solid var(--c-b8860b)',
-      borderRadius: 4,
-      cursor: 'pointer',
-      color: 'var(--c-8b6914)'
-    }
-  }, "Use Seq Bonus II-B")), !ps.bonusBookPhase && /*#__PURE__*/React.createElement(React.Fragment, null, ps.undoStack.length > 0 && !computer && /*#__PURE__*/React.createElement("button", {
-    onClick: () => onUndo(playerIdx),
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 12,
-      padding: '4px 10px',
-      background: 'var(--c-fff)',
-      color: 'var(--c-888)',
-      border: '1.5px solid var(--c-ccc)',
-      borderRadius: 4,
-      cursor: 'pointer'
-    },
-    onMouseEnter: e => {
-      e.target.style.color = 'var(--c-c0392b)';
-      e.target.style.borderColor = 'var(--c-c0392b)';
-    },
-    onMouseLeave: e => {
-      e.target.style.color = 'var(--c-888)';
-      e.target.style.borderColor = 'var(--c-ccc)';
-    }
-  }, "\u21A9 Undo"), computer && (computer.status || ps.hint && ps.hint.note) && /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: 'var(--c-8b6914)'
-    }
-  }, computer.status || ps.hint.note), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && !computer && (() => {
-    // Round 8: the hint is worked out in the background (gold progress bar). Before
-    // anything is found a click stops it; after that a click books the best so far
-    const job = r8Job && !r8Job.final ? r8Job : null;
-    const ready = !ps.hint && r8Job && r8Job.result && r8Job.stale;
-    const pct = job ? Math.round((job.progress || 0) * 100) : 0;
-    const secs = job ? Math.round((Date.now() - job.started) / 1000) : 0;
-    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
-      onClick: () => onHint(playerIdx),
-      title: ps.hint ? 'Take back the suggested booking' : job && job.result ? 'Book the best play found so far' : job ? 'Stop working out the hint' : 'Book the best play for this round',
+    }, ['sequence', 'matching', 'ladder'].map(cat => /*#__PURE__*/React.createElement("button", {
+      key: cat,
+      onClick: () => onUpdatePlayer(playerIdx, {
+        chosenCategory: cat
+      }),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 12,
-        padding: '4px 10px',
-        background: ps.hint ? 'var(--c-d4a017)' : 'var(--c-fffde6)',
-        color: ps.hint ? 'var(--c-fff)' : 'var(--c-8b6914)',
-        border: '1.5px solid var(--c-b8860b)',
+        fontSize: 16,
+        lineHeight: '20px',
+        padding: '6px 16px',
+        background: 'var(--c-fff)',
+        color: 'var(--c-2a2a2a)',
+        border: '2px solid var(--c-2a2a2a)',
         borderRadius: 4,
         cursor: 'pointer',
-        fontWeight: ps.hint ? 'bold' : 'normal',
-        boxShadow: ps.hint ? '0 0 0 2px var(--c-f5e6a8)' : 'none'
+        transition: 'all 0.15s'
       }
-    }, "\uD83D\uDCA1 Hint"), job && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    }, cat[0].toUpperCase()))), /*#__PURE__*/React.createElement("div", {
       style: {
-        width: 110,
-        height: 8,
-        background: 'var(--c-f3ead0)',
-        borderRadius: 4,
-        overflow: 'hidden'
+        fontSize: 12,
+        lineHeight: '16px',
+        textAlign: 'center',
+        marginTop: 4,
+        opacity: 0.6
+      }
+    }, "S = Sequence \xB7 M = Matching \xB7 L = Ladder")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 12,
+        flexWrap: 'wrap'
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
-        width: `${pct}%`,
-        height: '100%',
-        background: 'var(--c-d4a017)',
-        transition: 'width 0.3s'
-      }
-    })), /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: 'var(--c-8b6914)'
-      }
-    }, `${pct}% · ${secs}s`,
-    // the plays checked so far, until a best so far shows them in its note
-    job.total && !(ps.hint && ps.hint.soFar && ps.hint.r8 === job.key) ? ` · ${(job.checked || 0).toLocaleString('en-US')} of ${job.total.toLocaleString('en-US')} plays checked` : '')), r8Job && r8Job.final && r8Job.ended && /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: 'var(--c-8b6914)'
-      }
-    }, `${Math.round((r8Job.ended - r8Job.started) / 1000)}s`), ready && /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: 'var(--c-8b6914)'
-      }
-    }, "Hint ready"), ps.hint && ps.hint.note && /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11,
-        color: 'var(--c-8b6914)'
-      }
-    }, ps.hint.soFar && job && job.key === ps.hint.r8 && job.total ? `Best so far · ${(job.checked || 0).toLocaleString('en-US')} of ${job.total.toLocaleString('en-US')} plays checked` : ps.hint.note));
-  })(), (!computer || computer.booked || phase !== 'book') && /*#__PURE__*/React.createElement("button", {
-    onClick: () => onEndRound(playerIdx),
-    style: {
-      fontFamily: "'Special Elite', 'Courier New', monospace",
-      fontSize: 13,
-      padding: '4px 14px',
-      background: 'var(--c-2a2a2a)',
-      color: 'var(--c-fff)',
-      border: 'none',
-      borderRadius: 4,
-      cursor: 'pointer',
-      marginLeft: 'auto'
-    }
-  }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round')))), phase === 'book' && !ps.bonusBookPhase && (round === TOTAL_ROUNDS - 3 || round === TOTAL_ROUNDS - 2) && hintsOn && typeof SimiliSolver !== 'undefined' && !computer && /*#__PURE__*/React.createElement("div", {
-    style: ps.roundDone ? {
-      borderTop: '1px dashed var(--c-ccc)',
-      paddingTop: 8,
-      marginTop: 6
-    } : undefined
-  }, /*#__PURE__*/React.createElement(NextRoundPreview, {
-    ps: ps,
-    bank: bank,
-    round: round,
-    classicMode: classicMode,
-    laxPlacement: laxPlacement,
-    redInk: redInk,
-    autoRun: !!ps.hint
-  })), phase === 'endgame-bonus' && !ps.bonusBookPhase && !ps.roundDone && (() => {
-    const anyUnused = ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed || ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed;
-    return /*#__PURE__*/React.createElement("div", {
-      style: {
-        padding: 10,
-        marginTop: 6,
-        background: 'var(--c-fffde6)',
-        border: '1.5px solid var(--c-b8860b)',
-        borderRadius: 6
+        flex: '0 0 auto'
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 13,
         fontWeight: 'bold',
-        color: 'var(--c-8b6914)',
         marginBottom: 4
       }
-    }, anyUnused ? 'Use remaining Sequence Bonuses!' : 'All bonuses used!'), /*#__PURE__*/React.createElement("div", {
+    }, "Bank"), Array.from({
+      length: TOTAL_ROUNDS
+    }, (_, r) => {
+      const roundDigits = bank.filter(b => b.round === r);
+      const startIdx = bank.indexOf(roundDigits[0]);
+      const history = roundHistory[r];
+      return /*#__PURE__*/React.createElement("div", {
+        key: r,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 3,
+          marginBottom: 1,
+          opacity: r > round ? 0.3 : 1
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 12,
+          width: 18,
+          textAlign: 'right'
+        }
+      }, r + 1, "."), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          width: 12,
+          textAlign: 'center',
+          textDecoration: history ? 'underline' : 'none',
+          fontWeight: history ? 'bold' : 'normal'
+        }
+      }, r < round && history ? ps.chosenCategory && r === round ? ps.chosenCategory[0].toUpperCase() : roundHistory[r] ? roundHistory[r].categories?.[playerIdx]?.[0]?.toUpperCase() || '·' : '·' : r === round && ps.chosenCategory && (!computer || cpuShown) ? ps.chosenCategory[0].toUpperCase() : '·'), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 1,
+          minWidth: 94
+        }
+      }, roundDigits.length > 0 ? roundDigits.map((b, i) => {
+        const globalIdx = startIdx + i;
+        return /*#__PURE__*/React.createElement(BankDigit, {
+          key: i,
+          digit: b.digit,
+          used: ps.bankUsed[globalIdx],
+          selected: ps.selectedBankIndices.includes(globalIdx),
+          selectable: canSelectBank && !ps.bankUsed[globalIdx],
+          onClick: () => onToggleBankSelection(playerIdx, globalIdx),
+          crossOut: crossOut
+        });
+      }) : /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          opacity: 0.3,
+          lineHeight: '32px'
+        }
+      }, "\xB7 \xB7 \xB7")));
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 12,
+        flex: 1,
+        minWidth: 0,
+        flexDirection: verticalCategories ? 'column' : 'row'
+      }
+    }, ['sequence', 'matching', 'ladder'].map(cat => {
+      const catLabel = cat.charAt(0).toUpperCase() + cat.slice(1);
+      const scoreInfo = cat === 'sequence' ? 'XYZ=10 / WXYZ=15' : cat === 'matching' ? 'XXX=15 / XXXX=20' : 'XXYY=20 (Y=X±1)';
+      const canBookHere = phase === 'book' && !ps.roundDone && ps.chosenCategory === cat || ps.bonusBookPhase && !ps.roundDone && bonusBookCategories.includes(cat) || phase === 'endgame-bonus' && ps.bonusBookPhase && !ps.roundDone && bonusBookCategories.includes(cat);
+      return /*#__PURE__*/React.createElement("div", {
+        key: cat,
+        style: {
+          flex: 1,
+          minWidth: 0
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          marginBottom: 3
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 14,
+          fontWeight: 'bold',
+          fontStyle: 'italic'
+        }
+      }, catLabel), /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 10,
+          opacity: 0.5
+        }
+      }, scoreInfo)), grids[cat].map((row, rowIdx) => {
+        const rowScore = scoreRow(cat, row, laxPlacement);
+        const scoringCells = (() => {
+          if (rowScore === 0) return new Set();
+          if (cat === 'ladder') return new Set(row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1));
+          if (cat === 'matching') {
+            const filled = row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
+            if (rowScore === 20) return new Set(filled);
+            if (laxPlacement) return new Set(filled);
+            for (let start = 0; start <= filled.length - 3; start++) {
+              const group = filled.slice(start, start + 3);
+              if (group[2] - group[0] === 2) return new Set(group);
+            }
+            return new Set();
+          }
+          if (cat === 'sequence') {
+            const filled = row.map((c, i) => c !== null ? i : -1).filter(i => i !== -1);
+            if (rowScore === 15 && filled.length === 4) return new Set(filled);
+            for (let start = 0; start <= filled.length - 3; start++) {
+              const group = filled.slice(start, start + 3);
+              if (group[2] - group[0] === 2) {
+                const digits = group.map(i => row[i]);
+                if (isValidSequence(digits)) return new Set(group);
+              }
+            }
+            return new Set();
+          }
+          return new Set();
+        })();
+        const selectedDigit = ps.selectedBankIndices.length === 1 ? bank[ps.selectedBankIndices[0]].digit : null;
+        const canPlaceInCell = colIdx => {
+          if (!canBookHere || row[colIdx] !== null || selectedDigit === null) return false;
+          if (cat === 'sequence') {
+            const existing = row.map((d, i) => d !== null ? {
+              digit: d,
+              pos: i
+            } : null).filter(Boolean);
+            return canExtendSequence(existing, selectedDigit, colIdx);
+          } else if (cat === 'matching') {
+            const existing = row.filter(c => c !== null);
+            return existing.length === 0 || existing[0] === selectedDigit;
+          } else if (cat === 'ladder') {
+            const newRow = [...row];
+            newRow[colIdx] = selectedDigit;
+            return laxPlacement ? isValidLaxLadderPlacement(newRow) : isValidLadderPlacement(newRow);
+          }
+          return true;
+        };
+        const rowHints = cellHints ? getCellHints(cat, row, laxPlacement) : null;
+        return /*#__PURE__*/React.createElement("div", {
+          key: rowIdx,
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            marginBottom: 2
+          }
+        }, row.map((cell, colIdx) => /*#__PURE__*/React.createElement(GridCell, {
+          key: colIdx,
+          value: cell,
+          clickable: canPlaceInCell(colIdx),
+          highlight: scoringCells.has(colIdx),
+          hinted: phase === 'book' && !ps.roundDone && !!ps.hint && ps.hint.cells.includes(`${cat}-${rowIdx}-${colIdx}`),
+          onClick: () => onBookDigit(playerIdx, cat, rowIdx, colIdx),
+          hints: rowHints ? rowHints[colIdx] : null
+        })), rowScore > 0 && /*#__PURE__*/React.createElement("span", {
+          style: {
+            fontSize: 12,
+            fontWeight: 'bold',
+            color: redInk,
+            marginLeft: 3
+          }
+        }, "+", rowScore));
+      }));
+    }))), (phase === 'book' || phase === 'endgame-bonus' && ps.bonusBookPhase) && !ps.roundDone && /*#__PURE__*/React.createElement("div", {
+      style: {
+        borderTop: '1px dashed var(--c-ccc)',
+        paddingTop: 8,
+        marginTop: 6
+      }
+    }, !ps.bonusBookPhase && phase === 'book' && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("strong", null, "Booking into ", ps.chosenCategory?.charAt(0).toUpperCase() + ps.chosenCategory?.slice(1)), ' · ', ps.bookingsThisRound, " / ", ps.maxBooking, " booked"), ps.bonusBookPhase && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        marginBottom: 6,
+        color: redInk
+      }
+    }, /*#__PURE__*/React.createElement("strong", null, "\uD83C\uDF81 Bonus Book!"), " Place 1 digit into ", bonusBookCategories.length === 3 ? 'any category' : 'Sequence', ".", /*#__PURE__*/React.createElement("button", {
+      onClick: () => onEndBonusBook(playerIdx),
+      style: {
+        fontFamily: "'Special Elite', 'Courier New', monospace",
+        fontSize: 11,
+        marginLeft: 6,
+        padding: '2px 6px',
+        background: 'var(--c-eee)',
+        border: '1px solid var(--c-ccc)',
+        borderRadius: 3,
+        cursor: 'pointer'
+      }
+    }, "Cancel")), /*#__PURE__*/React.createElement("div", {
       style: {
         display: 'flex',
         gap: 6,
-        alignItems: 'center',
-        flexWrap: 'wrap'
+        flexWrap: 'wrap',
+        alignItems: 'center'
       }
-    }, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && !computer && /*#__PURE__*/React.createElement("button", {
+    }, !ps.bonusBookPhase && phase === 'book' && !computer && /*#__PURE__*/React.createElement(React.Fragment, null, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && /*#__PURE__*/React.createElement("button", {
       onClick: () => onUseBonusBook(playerIdx, 'A'),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 12,
         padding: '4px 10px',
-        background: 'var(--c-fff)',
+        background: 'var(--c-fffde6)',
         border: '1.5px solid var(--c-b8860b)',
         borderRadius: 4,
-        cursor: 'pointer'
+        cursor: 'pointer',
+        color: 'var(--c-8b6914)'
       }
-    }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && !computer && /*#__PURE__*/React.createElement("button", {
+    }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && /*#__PURE__*/React.createElement("button", {
       onClick: () => onUseBonusBook(playerIdx, 'B'),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
         fontSize: 12,
         padding: '4px 10px',
-        background: 'var(--c-fff)',
+        background: 'var(--c-fffde6)',
         border: '1.5px solid var(--c-b8860b)',
         borderRadius: 4,
-        cursor: 'pointer'
+        cursor: 'pointer',
+        color: 'var(--c-8b6914)'
       }
-    }, "Use Seq Bonus II-B"), ps.undoStack.length > 0 && !computer && /*#__PURE__*/React.createElement("button", {
+    }, "Use Seq Bonus II-B")), !ps.bonusBookPhase && /*#__PURE__*/React.createElement(React.Fragment, null, ps.undoStack.length > 0 && !computer && /*#__PURE__*/React.createElement("button", {
       onClick: () => onUndo(playerIdx),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -3172,13 +3021,86 @@ function PlayerSheet({
         border: '1.5px solid var(--c-ccc)',
         borderRadius: 4,
         cursor: 'pointer'
+      },
+      onMouseEnter: e => {
+        e.target.style.color = 'var(--c-c0392b)';
+        e.target.style.borderColor = 'var(--c-c0392b)';
+      },
+      onMouseLeave: e => {
+        e.target.style.color = 'var(--c-888)';
+        e.target.style.borderColor = 'var(--c-ccc)';
       }
-    }, "\u21A9 Undo"), /*#__PURE__*/React.createElement("button", {
-      onClick: () => onEndgameBonusDone(playerIdx),
+    }, "\u21A9 Undo"), computer && (computer.status || ps.hint && ps.hint.note) && /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--c-8b6914)'
+      }
+    }, computer.status || ps.hint.note), hintsOn && phase === 'book' && round >= TOTAL_ROUNDS - 3 && typeof SimiliSolver !== 'undefined' && !computer && (() => {
+      // Round 8: the hint is worked out in the background (gold progress bar). Before
+      // anything is found a click stops it; after that a click books the best so far
+      const job = r8Job && !r8Job.final ? r8Job : null;
+      const ready = !ps.hint && r8Job && r8Job.result && r8Job.stale;
+      const pct = job ? Math.round((job.progress || 0) * 100) : 0;
+      const secs = job ? Math.round((Date.now() - job.started) / 1000) : 0;
+      return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+        onClick: () => onHint(playerIdx),
+        title: ps.hint ? 'Take back the suggested booking' : job && job.result ? 'Book the best play found so far' : job ? 'Stop working out the hint' : 'Book the best play for this round',
+        style: {
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          fontSize: 12,
+          padding: '4px 10px',
+          background: ps.hint ? 'var(--c-d4a017)' : 'var(--c-fffde6)',
+          color: ps.hint ? 'var(--c-fff)' : 'var(--c-8b6914)',
+          border: '1.5px solid var(--c-b8860b)',
+          borderRadius: 4,
+          cursor: 'pointer',
+          fontWeight: ps.hint ? 'bold' : 'normal',
+          boxShadow: ps.hint ? '0 0 0 2px var(--c-f5e6a8)' : 'none'
+        }
+      }, "\uD83D\uDCA1 Hint"), job && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: 110,
+          height: 8,
+          background: 'var(--c-f3ead0)',
+          borderRadius: 4,
+          overflow: 'hidden'
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          width: `${pct}%`,
+          height: '100%',
+          background: 'var(--c-d4a017)',
+          transition: 'width 0.3s'
+        }
+      })), /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: 'var(--c-8b6914)'
+        }
+      }, `${pct}% · ${secs}s`,
+      // the plays checked so far, until a best so far shows them in its note
+      job.total && !(ps.hint && ps.hint.soFar && ps.hint.r8 === job.key) ? ` · ${(job.checked || 0).toLocaleString('en-US')} of ${job.total.toLocaleString('en-US')} plays checked` : '')), r8Job && r8Job.final && r8Job.ended && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: 'var(--c-8b6914)'
+        }
+      }, `${Math.round((r8Job.ended - r8Job.started) / 1000)}s`), ready && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: 'var(--c-8b6914)'
+        }
+      }, "Hint ready"), ps.hint && ps.hint.note && /*#__PURE__*/React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: 'var(--c-8b6914)'
+        }
+      }, ps.hint.soFar && job && job.key === ps.hint.r8 && job.total ? `Best so far · ${(job.checked || 0).toLocaleString('en-US')} of ${job.total.toLocaleString('en-US')} plays checked` : ps.hint.note));
+    })(), (!computer || computer.booked || phase !== 'book') && /*#__PURE__*/React.createElement("button", {
+      onClick: () => onEndRound(playerIdx),
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
-        fontSize: 12,
-        padding: '4px 12px',
+        fontSize: 13,
+        padding: '4px 14px',
         background: 'var(--c-2a2a2a)',
         color: 'var(--c-fff)',
         border: 'none',
@@ -3186,43 +3108,134 @@ function PlayerSheet({
         cursor: 'pointer',
         marginLeft: 'auto'
       }
-    }, anyUnused ? 'Skip & Finish' : 'Finish')));
-  })(), /*#__PURE__*/React.createElement("div", {
-    style: {
-      borderTop: '1px dashed var(--c-ccc)',
-      paddingTop: 6,
-      marginTop: 8,
-      fontSize: 11,
-      opacity: 0.7
-    }
-  }, /*#__PURE__*/React.createElement("strong", null, "Sequence Bonus:"), ' ', /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: seqBonusI ? 'var(--c-27ae60)' : 'var(--c-999)'
-    }
-  }, "I ", seqBonusI ? '✓' : '○'), ' · ', classicMode ? /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: ps.seqBonusIIAUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
-    }
-  }, "II ", ps.seqBonusIIAUnlocked ? ps.seqBonusIIAUsed ? `✓(${ps.seqBonusIIACategory})` : '★' : '○') : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: ps.seqBonusIIAUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
-    }
-  }, "II-A ", ps.seqBonusIIAUnlocked ? ps.seqBonusIIAUsed ? `✓(${ps.seqBonusIIACategory})` : '★' : '○'), ' · ', /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: ps.seqBonusIIBUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
-    }
-  }, "II-B ", ps.seqBonusIIBUnlocked ? ps.seqBonusIIBUsed ? `✓(${ps.seqBonusIIBCategory})` : '★' : '○')), ' · ', /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: seqBonusIII ? 'var(--c-27ae60)' : 'var(--c-999)'
-    }
-  }, "III ", seqBonusIII ? '✓ (+5)' : '○'), quadBonus && (() => {
-    const earned = hasQuadBonus(grids, laxPlacement);
-    return /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Quad Bonus"), ' ', /*#__PURE__*/React.createElement("span", {
+    }, phase === 'endgame-bonus' ? 'Finish' : round >= TOTAL_ROUNDS - 1 ? 'End Game' : 'End Round'))))), /*#__PURE__*/React.createElement("div", {
       style: {
-        color: earned ? 'var(--c-27ae60)' : 'var(--c-999)'
+        marginTop: 'auto'
       }
-    }, earned ? '✓ (+1)' : '○'));
-  })(), laxPlacement && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Lax Placement On")), hintsOn && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Hints On"))));
+    }, phase === 'book' && !ps.bonusBookPhase && (round === TOTAL_ROUNDS - 3 || round === TOTAL_ROUNDS - 2) && hintsOn && typeof SimiliSolver !== 'undefined' && (!computer || computer.booked) && /*#__PURE__*/React.createElement("div", {
+      style: ps.roundDone || computer ? {
+        borderTop: '1px dashed var(--c-ccc)',
+        paddingTop: 8,
+        marginTop: 6
+      } : undefined
+    }, /*#__PURE__*/React.createElement(NextRoundPreview, {
+      ps: ps,
+      bank: bank,
+      round: round,
+      classicMode: classicMode,
+      laxPlacement: laxPlacement,
+      redInk: redInk,
+      autoRun: computer ? true : !!ps.hint,
+      forComputer: !!computer
+    })), phase === 'endgame-bonus' && !ps.bonusBookPhase && !ps.roundDone && (() => {
+      const anyUnused = ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed || ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed;
+      return /*#__PURE__*/React.createElement("div", {
+        style: {
+          padding: 10,
+          marginTop: 6,
+          background: 'var(--c-fffde6)',
+          border: '1.5px solid var(--c-b8860b)',
+          borderRadius: 6
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          fontSize: 13,
+          fontWeight: 'bold',
+          color: 'var(--c-8b6914)',
+          marginBottom: 4
+        }
+      }, anyUnused ? 'Use remaining Sequence Bonuses!' : 'All bonuses used!'), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 6,
+          alignItems: 'center',
+          flexWrap: 'wrap'
+        }
+      }, ps.seqBonusIIAUnlocked && !ps.seqBonusIIAUsed && !computer && /*#__PURE__*/React.createElement("button", {
+        onClick: () => onUseBonusBook(playerIdx, 'A'),
+        style: {
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          fontSize: 12,
+          padding: '4px 10px',
+          background: 'var(--c-fff)',
+          border: '1.5px solid var(--c-b8860b)',
+          borderRadius: 4,
+          cursor: 'pointer'
+        }
+      }, classicMode ? 'Use Seq Bonus II' : 'Use Seq Bonus II-A'), !classicMode && ps.seqBonusIIBUnlocked && !ps.seqBonusIIBUsed && !computer && /*#__PURE__*/React.createElement("button", {
+        onClick: () => onUseBonusBook(playerIdx, 'B'),
+        style: {
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          fontSize: 12,
+          padding: '4px 10px',
+          background: 'var(--c-fff)',
+          border: '1.5px solid var(--c-b8860b)',
+          borderRadius: 4,
+          cursor: 'pointer'
+        }
+      }, "Use Seq Bonus II-B"), ps.undoStack.length > 0 && !computer && /*#__PURE__*/React.createElement("button", {
+        onClick: () => onUndo(playerIdx),
+        style: {
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          fontSize: 12,
+          padding: '4px 10px',
+          background: 'var(--c-fff)',
+          color: 'var(--c-888)',
+          border: '1.5px solid var(--c-ccc)',
+          borderRadius: 4,
+          cursor: 'pointer'
+        }
+      }, "\u21A9 Undo"), /*#__PURE__*/React.createElement("button", {
+        onClick: () => onEndgameBonusDone(playerIdx),
+        style: {
+          fontFamily: "'Special Elite', 'Courier New', monospace",
+          fontSize: 12,
+          padding: '4px 12px',
+          background: 'var(--c-2a2a2a)',
+          color: 'var(--c-fff)',
+          border: 'none',
+          borderRadius: 4,
+          cursor: 'pointer',
+          marginLeft: 'auto'
+        }
+      }, anyUnused ? 'Skip & Finish' : 'Finish')));
+    })(), /*#__PURE__*/React.createElement("div", {
+      style: {
+        borderTop: '1px dashed var(--c-ccc)',
+        paddingTop: 6,
+        marginTop: 8,
+        fontSize: 11,
+        opacity: 0.7
+      }
+    }, /*#__PURE__*/React.createElement("strong", null, "Sequence Bonus:"), ' ', /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: seqBonusI ? 'var(--c-27ae60)' : 'var(--c-999)'
+      }
+    }, "I ", seqBonusI ? '✓' : '○'), ' · ', classicMode ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: ps.seqBonusIIAUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
+      }
+    }, "II ", ps.seqBonusIIAUnlocked ? ps.seqBonusIIAUsed ? `✓(${ps.seqBonusIIACategory})` : '★' : '○') : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: ps.seqBonusIIAUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
+      }
+    }, "II-A ", ps.seqBonusIIAUnlocked ? ps.seqBonusIIAUsed ? `✓(${ps.seqBonusIIACategory})` : '★' : '○'), ' · ', /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: ps.seqBonusIIBUnlocked ? 'var(--c-27ae60)' : 'var(--c-999)'
+      }
+    }, "II-B ", ps.seqBonusIIBUnlocked ? ps.seqBonusIIBUsed ? `✓(${ps.seqBonusIIBCategory})` : '★' : '○')), ' · ', /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: seqBonusIII ? 'var(--c-27ae60)' : 'var(--c-999)'
+      }
+    }, "III ", seqBonusIII ? '✓ (+5)' : '○'), quadBonus && (() => {
+      const earned = hasQuadBonus(grids, laxPlacement);
+      return /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Quad Bonus"), ' ', /*#__PURE__*/React.createElement("span", {
+        style: {
+          color: earned ? 'var(--c-27ae60)' : 'var(--c-999)'
+        }
+      }, earned ? '✓ (+1)' : '○'));
+    })(), laxPlacement && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Lax Placement On")), hintsOn && /*#__PURE__*/React.createElement(React.Fragment, null, ' · ', /*#__PURE__*/React.createElement("strong", null, "Hints On")))))
+  );
 }
 
 // --- Main Game Component ---
