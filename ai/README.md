@@ -91,9 +91,8 @@ take far too long to finish, so the search goes for the likeliest plays first:
    2.3 core-hours of a 6.4 on an 8,548-position decision. If the network cannot be
    loaded, the positions go in order of their upper bounds);
 2. (no second step any more);
-3. positions are then solved exactly in that order. After the first batch (one per
-   worker, at most 24) the best so far is booked, with the note "Best so far · 10 of N
-   plays checked" (say), and the
+3. positions are then solved exactly in that order. As soon as the first one is solved
+   the best so far is booked, with the note "Best so far · 1 of N plays checked", and the
    gold bar keeps going. Whenever something better turns up it is booked instead
    (while the sheet still shows the hint);
 4. when every position has been checked (or skipped because its bound shows it
@@ -111,10 +110,12 @@ free books) and partly solved each of them. With 2 workers the whole search now 
 1,355 s (same answer).
 
 Smaller decisions (under 300 positions, usually Matching or Ladder) go in the network's
-order too and report the same way: the best so far once the first batch is checked (one
-position per worker, at most 24: a Ladder position with a free book in reach can take
-10-30 s to solve, so waiting for 24 meant minutes on few workers), the live count of plays
-checked, and "Best play · all N plays checked" at the end. No decision works out the quick bounds of all its positions
+order too and report the same way: the best so far from the first position solved on, the
+live count of plays checked (next to the gold bar until there is a best so far), and "Best
+play · all N plays checked" at the end. (Waiting for a first batch of positions before
+booking anything did not work: those are solved with nothing to beat, so they are the
+slowest, and the slowest of them often came back near the end of the whole search.) The
+bar reaches 98% as the last play is checked and shows 99% during the final checks (ties). No decision works out the quick bounds of all its positions
 first any more: each position's quick bound is worked out when its turn comes, and it is skipped right there if even that cannot reach the best so far. Only
 if the network cannot be loaded are all the bounds worked out first, to order by them.
 
@@ -172,9 +173,12 @@ Finally, with the digits settled, where to put them among equivalent places:
 
 9. ordinary books before Sequence Bonus II-A, and II-B last (a play that wins
    without II-B also wins in Classic, where II-B does not exist).
-10. lean left: prefer the cells that come first in reading order (category, row,
-   column), so `890_` beats `_890`, and the upper of two identical empty rows is used.
-11. if still tied (`890_` vs `098_`, `3344` vs `4433`), prefer Sequences and Ladders written
+10. fuller rows above: comparing rows top to bottom, prefer more cells filled, so when
+    a booking starts two new rows the bigger one goes on top (`_90_` above `2___`), and
+    the upper of two identical empty rows is used.
+11. lean left: prefer the cells that come first in reading order (category, row,
+   column), so `890_` beats `_890`.
+12. if still tied (`890_` vs `098_`, `3344` vs `4433`), prefer Sequences and Ladders written
     ascending (for Ladders, Y = X + 1 wrapping round: `9900` is ascending, `0099` is not).
 
 Item 6 costs little. In round 9 it only needs the three round-10 category values of

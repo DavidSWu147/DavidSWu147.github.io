@@ -1614,7 +1614,10 @@ function computerCategory(state, k, classicMode) {
 // within R8_COMPUTER_SECONDS; else its best so far; else (nothing found yet, as on big
 // Sequence decisions) the network's choice, re-checked with the exact solver.
 const R8_COMPUTER_SECONDS = 60;
-function computerBooking(state, cat, bankList, k, classicMode) {
+// onCount (Round 8, optional): ({ checked, total }) as the exact search goes. The Round 8
+// result carries r8: { checked, total, how } (how: 'all' every play checked, 'soFar' the
+// exact search's best at the time limit, 'network' the network's choice at the time limit).
+function computerBooking(state, cat, bankList, k, classicMode, onCount) {
   if (k === 3) {
     let stop = () => {},
       timer = null,
@@ -1625,15 +1628,26 @@ function computerBooking(state, cat, bankList, k, classicMode) {
       // soFarCovers: the exact search has checked the network's choice, so its best so far
       // is at least as good (otherwise the network's choice is used at the time limit)
       let soFar = null,
-        soFarCovers = false;
-      const finish = best => {
+        soFarCovers = false,
+        count = {
+          checked: 0,
+          total: 0
+        };
+      const finish = (best, how) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         stop();
         if (net) net.cancel();
         if (rank) rank.cancel();
-        resolve(best);
+        resolve({
+          ...best,
+          r8: {
+            checked: how === 'all' ? count.total : count.checked,
+            total: count.total,
+            how
+          }
+        });
       };
       net = runAiJobs([{
         ...stateMsg(state, classicMode),
@@ -1662,15 +1676,23 @@ function computerBooking(state, cat, bankList, k, classicMode) {
         if (stop.prioritize && !settled) stop.prioritize([netBest.placements], true);
       }, () => {});
       // at most 4 workers, so it can run alongside a Round 8 Hint without the page running out of memory
-      stop = startRound8Job(state, cat, bankList, classicMode, () => {}, (best, info) => {
+      stop = startRound8Job(state, cat, bankList, classicMode, (p, info) => {
+        if (info && info.total) {
+          count = {
+            checked: info.checked,
+            total: info.total
+          };
+          if (onCount && !settled) onCount(count);
+        }
+      }, (best, info) => {
         soFar = best;
         soFarCovers = !!(info && info.priorityDone);
-      }, finish, {
+      }, best => finish(best, 'all'), {
         reportAll: true,
         maxWorkers: 4
       });
       timer = setTimeout(() => {
-        if (soFar && (soFarCovers || !netBest)) finish(soFar);else if (netBest) finish(netBest);else net.promise.then(rs => finish(rs[0].best), reject);
+        if (soFar && (soFarCovers || !netBest)) finish(soFar, 'soFar');else if (netBest) finish(netBest, 'network');else net.promise.then(rs => finish(rs[0].best, 'network'), reject);
       }, R8_COMPUTER_SECONDS * 1000);
     });
     return {
@@ -1925,7 +1947,9 @@ function startRound8Job(state, cat, bankList, classicMode, onProgress, onSoFar, 
   // with the estimates, estimating everything is a large share of the time to the first answer
   const p0 = useScreen && !netOrder ? 0.25 : 0.1,
     p1 = useScreen && !netOrder ? 0.3 : 0.1;
-  const report = () => onProgress(phase === 0 ? p0 * boundsDone / n : phase === 0.5 ? p0 + (p1 - p0) * refined / refineList.length : phase === 1 ? p1 + (0.98 - p1) * processed / n : phase === 2 ? 0.98 + 0.015 * (tied.length ? tiedDone / tied.length : 1) : 0.995 + 0.005 * (ties.length ? altDone / ties.length : 1), {
+  const report = () => onProgress(phase === 0 ? p0 * boundsDone / n : phase === 0.5 ? p0 + (p1 - p0) * refined / refineList.length : phase === 1 ? p1 + (0.98 - p1) * processed / n
+  // every play checked: the final checks (ties) stay at 99% (shown rounded, so below 99.5%)
+  : phase === 2 ? 0.99 + 0.002 * (tied.length ? tiedDone / tied.length : 1) : 0.992 + 0.002 * (ties.length ? altDone / ties.length : 1), {
     checked: processed,
     total: n
   });
@@ -3679,7 +3703,9 @@ window.Simili = function Simili() {
   const [logPageIndex, setLogPageIndex] = useState(-1); // -1 means latest page
   const [statsPageIndex, setStatsPageIndex] = useState(0);
   const [wideLayout, setWideLayout] = useState(false);
-  const [darkMode, setDarkMode] = useState(false); // Light Mode (the original look) by default
+  const [darkMode, setDarkMode] = useState(false); // Light Mode (the original look) by default; the toggle is not shown at present
+  const [showSeedButton, setShowSeedButton] = useState(false); // Export Game / Match Seed buttons (Display settings)
+  const [seedCopied, setSeedCopied] = useState(null); // which Export Seed button just copied (for its 'Copied!' label)
   const [verticalCategories, setVerticalCategories] = useState(false);
   const [cellHints, setCellHints] = useState(false);
   const [extendedStats, setExtendedStats] = useState(false);
@@ -4476,6 +4502,8 @@ window.Simili = function Simili() {
   const cpuKey = what => `${gameNumberRef.current}-${round}-${what}`;
   // its Round 9 category, worked out ahead (see its booking); let go once used or the game moves on
   const cpuPonderRef = useRef(null);
+  // Round 8 (Game Hints On): its exact search's plays checked so far, for its status line
+  const [cpuCount, setCpuCount] = useState(null);
   const stopCpuPonder = () => {
     if (cpuPonderRef.current) cpuPonderRef.current();
     cpuPonderRef.current = null;
@@ -4541,14 +4569,21 @@ window.Simili = function Simili() {
       bankList
     } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(start) : start, bank.map(b => b.digit));
     const cat = ['sequence', 'matching', 'ladder'].indexOf(start.chosenCategory);
-    startCpu(key, 'booking', computerBooking(state, cat, bankList, TOTAL_ROUNDS - round, classicMode), best => {
+    setCpuCount(null);
+    startCpu(key, 'booking', computerBooking(state, cat, bankList, TOTAL_ROUNDS - round, classicMode, c => setCpuCount({
+      key,
+      ...c
+    })), best => {
       const n = best.placements.length;
+      // Round 8 with Game Hints On: how much of its exact search it got through
+      const fmt = x => x.toLocaleString('en-US');
+      const r8 = hintsOn && best.r8 && best.r8.total ? best.r8.how === 'all' ? ` · all ${fmt(best.r8.total)} plays checked` : ` · ${fmt(best.r8.checked)} of ${fmt(best.r8.total)} plays checked in ${R8_COMPUTER_SECONDS}s${best.r8.how === 'network' ? ' (its network\'s pick)' : ''}` : '';
       setCpu({
         key,
         stage: 'ready',
         best: {
           ...best,
-          note: n ? `Booked ${n} digit${n > 1 ? 's' : ''}` : 'Booked nothing'
+          note: (n ? `Booked ${n} digit${n > 1 ? 's' : ''}` : 'Booked nothing') + r8
         },
         start
       });
@@ -4605,7 +4640,7 @@ window.Simili = function Simili() {
     const secs = cpu && cpu.started ? Math.round((Date.now() - cpu.started) / 1000) : 0;
     let status = null;
     if (cpu && cpu.key && cpu.key.startsWith(`${gameNumberRef.current}-${round}-`)) {
-      if (cpu.stage === 'category') status = `Choosing a category… ${secs}s`;else if (cpu.stage === 'booking') status = `Thinking… ${secs}s`;else if (cpu.stage === 'ready') status = 'Decided · end your turn to see its booking';else if (cpu.stage === 'error') status = `Cannot play: ${cpu.message}`;
+      if (cpu.stage === 'category') status = `Choosing a category… ${secs}s`;else if (cpu.stage === 'booking') status = `Thinking… ${secs}s` + (hintsOn && cpuCount && cpuCount.key === cpu.key && cpuCount.total ? ` · ${cpuCount.checked.toLocaleString('en-US')} of ${cpuCount.total.toLocaleString('en-US')} plays checked` : '');else if (cpu.stage === 'ready') status = 'Decided · end your turn to see its booking';else if (cpu.stage === 'error') status = `Cannot play: ${cpu.message}`;
     }
     return {
       status,
@@ -5101,6 +5136,70 @@ window.Simili = function Simili() {
   const paperBg = 'var(--c-faf6ed)';
   const inkColor = 'var(--c-2a2a2a)';
   const redInk = 'var(--c-c0392b)';
+
+  // Export Seed: the rolls as a seed link (30 digits per game), copied to the clipboard.
+  // A game's seed needs all 10 rolls; a match's seed is its first four games (seed, seed2, ...)
+  const seedOf = rounds => rounds.length === TOTAL_ROUNDS ? rounds.map(r => r.roll.join('')).join('') : null;
+  const gameSeed = phase === 'gameover' ? seedOf(roundHistory) : null;
+  const matchSeeds = () => {
+    const games = gameLogs.filter(l => l.matchNumber === matchCounterRef.current && !l.isSuddenDeath && l.matchGame).sort((a, b) => a.matchGame - b.matchGame);
+    const seeds = [];
+    for (const g of games.slice(0, MATCH_GAMES)) {
+      const sd = seedOf(g.rounds);
+      if (!sd) break;
+      seeds.push(sd);
+    }
+    return seeds;
+  };
+  const copyText = (text, which) => {
+    const done = () => {
+      setSeedCopied(which);
+      setTimeout(() => setSeedCopied(c => c === which ? null : c), 1500);
+    };
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        done();
+      } catch (e) {
+        window.prompt('Copy this seed:', text);
+      }
+      document.body.removeChild(ta);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);else fallback();
+  };
+  const seedBtnStyle = {
+    fontFamily: "'Special Elite', 'Courier New', monospace",
+    fontSize: 14,
+    padding: '10px 16px',
+    background: 'var(--c-fff)',
+    color: 'var(--c-2a2a2a)',
+    border: '1.5px solid var(--c-2a2a2a)',
+    borderRadius: 6,
+    cursor: 'pointer',
+    letterSpacing: 1
+  };
+  const exportGameSeedBtn = () => showSeedButton && gameSeed ? /*#__PURE__*/React.createElement("button", {
+    onClick: () => copyText(`/?seed=${gameSeed}`, 'game'),
+    title: `/?seed=${gameSeed}`,
+    style: seedBtnStyle
+  }, seedCopied === 'game' ? 'Copied!' : 'Export Game Seed') : null;
+  const exportMatchSeedBtn = () => {
+    if (!showSeedButton) return null;
+    const ss = matchSeeds();
+    if (!ss.length) return null;
+    const text = '/?' + ss.map((sd, i) => `${i === 0 ? 'seed' : `seed${i + 1}`}=${sd}`).join('&');
+    return /*#__PURE__*/React.createElement("button", {
+      onClick: () => copyText(text, 'match'),
+      title: text,
+      style: seedBtnStyle
+    }, seedCopied === 'match' ? 'Copied!' : 'Export Match Seed');
+  };
   const gameOverInfo = phase === 'gameover' ? players.map(p => {
     const score = getPlayerFinalScore(p, classicMode, laxPlacement, quadBonus);
     const won = !abandoned && score >= 100;
@@ -5412,7 +5511,16 @@ window.Simili = function Simili() {
       fontSize: 12,
       opacity: 0.6
     }
-  }, "Match pts: ", gameOverInfo[0]?.won ? gameOverInfo[0]?.score : gameOverInfo[0]?.quadBonusEarned ? 1 : 0)), matchPlay && !abandoned && (matchPhase === 'playing' || matchPhase === 'sudden-death') && /*#__PURE__*/React.createElement("button", {
+  }, "Match pts: ", gameOverInfo[0]?.won ? gameOverInfo[0]?.score : gameOverInfo[0]?.quadBonusEarned ? 1 : 0)), (matchPlay && !abandoned && (matchPhase === 'playing' || matchPhase === 'sudden-death') || !matchPlay) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 10,
+      justifyContent: 'center',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      marginTop: 16
+    }
+  }, exportGameSeedBtn(), matchPlay && !abandoned && (matchPhase === 'playing' || matchPhase === 'sudden-death') && /*#__PURE__*/React.createElement("button", {
     onClick: handleMatchNextGame,
     style: {
       fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -5423,7 +5531,6 @@ window.Simili = function Simili() {
       border: 'none',
       borderRadius: 6,
       cursor: 'pointer',
-      marginTop: 16,
       letterSpacing: 2
     }
   }, matchPhase === 'sudden-death' ? 'SEE RESULT' : matchGameNum + 1 >= MATCH_GAMES ? 'SEE MATCH RESULTS' : 'NEXT GAME'), !matchPlay && /*#__PURE__*/React.createElement("button", {
@@ -5437,10 +5544,9 @@ window.Simili = function Simili() {
       border: 'none',
       borderRadius: 6,
       cursor: 'pointer',
-      marginTop: 16,
       letterSpacing: 2
     }
-  }, "PLAY AGAIN")), matchPlay && matchPhase === 'between' && /*#__PURE__*/React.createElement("div", {
+  }, "PLAY AGAIN"))), matchPlay && matchPhase === 'between' && /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 20,
       padding: 24,
@@ -5580,9 +5686,11 @@ window.Simili = function Simili() {
         display: 'flex',
         gap: 12,
         justifyContent: 'center',
+        alignItems: 'center',
+        flexWrap: 'wrap',
         marginTop: 12
       }
-    }, /*#__PURE__*/React.createElement("button", {
+    }, exportMatchSeedBtn(), /*#__PURE__*/React.createElement("button", {
       onClick: handleSuddenDeath,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -5623,7 +5731,15 @@ window.Simili = function Simili() {
         fontSize: 20,
         marginBottom: 12
       }
-    }, "Final Total: ", p1T, " points across ", matchScores.length, " game", matchScores.length !== 1 ? 's' : ''), (!result || !result.tied || matchAbandoned) && /*#__PURE__*/React.createElement("button", {
+    }, "Final Total: ", p1T, " points across ", matchScores.length, " game", matchScores.length !== 1 ? 's' : ''), (!result || !result.tied || matchAbandoned) && /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, exportMatchSeedBtn(), /*#__PURE__*/React.createElement("button", {
       onClick: handleReset,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -5636,7 +5752,7 @@ window.Simili = function Simili() {
         cursor: 'pointer',
         letterSpacing: 2
       }
-    }, "NEW MATCH"));
+    }, "NEW MATCH")));
   })(), matchPlay && matchPhase === 'sudden-death' && phase === 'gameover' && (() => {
     const p1S = getPlayerFinalScore(players[0], classicMode, laxPlacement, quadBonus);
     const p2S = twoPlayer ? getPlayerFinalScore(players[1], classicMode, laxPlacement, quadBonus) : 0;
@@ -5662,9 +5778,11 @@ window.Simili = function Simili() {
         style: {
           display: 'flex',
           gap: 8,
-          justifyContent: 'center'
+          justifyContent: 'center',
+          alignItems: 'center',
+          flexWrap: 'wrap'
         }
-      }, /*#__PURE__*/React.createElement("button", {
+      }, exportMatchSeedBtn(), /*#__PURE__*/React.createElement("button", {
         onClick: resetGameState,
         style: {
           fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -5705,7 +5823,15 @@ window.Simili = function Simili() {
         fontWeight: 'bold',
         marginBottom: 8
       }
-    }, "\uD83C\uDFC6 ", nameOf(p1M > p2M ? 0 : 1), " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("button", {
+    }, "\uD83C\uDFC6 ", nameOf(p1M > p2M ? 0 : 1), " Wins by Sudden Death!"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        justifyContent: 'center',
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, exportMatchSeedBtn(), /*#__PURE__*/React.createElement("button", {
       onClick: handleReset,
       style: {
         fontFamily: "'Special Elite', 'Courier New', monospace",
@@ -5718,7 +5844,7 @@ window.Simili = function Simili() {
         cursor: 'pointer',
         letterSpacing: 2
       }
-    }, "NEW MATCH"));
+    }, "NEW MATCH")));
   })(), /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: '1px dashed var(--c-ccc)',
@@ -5923,10 +6049,10 @@ window.Simili = function Simili() {
       marginTop: 8
     }
   }, /*#__PURE__*/React.createElement(ToggleSwitch, {
-    checked: darkMode,
-    onChange: setDarkMode,
-    leftLabel: "Light Mode",
-    rightLabel: "Dark Mode"
+    checked: showSeedButton,
+    onChange: setShowSeedButton,
+    leftLabel: "Hide Seed Button",
+    rightLabel: "Show Seed Button"
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,

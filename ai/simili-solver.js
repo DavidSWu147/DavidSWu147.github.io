@@ -12,7 +12,8 @@
 //   4. average final score when losing (sum over losing outcomes)
 // Booking tie-breaks (top-level only): 5. most points at the end of this round,
 // 6. fewest digits, 7. avoid the most recently banked digits,
-// 8. lean left (same digits placed further left / higher up), 9. ascending Sequences and Ladders.
+// 8. fuller rows above (two new rows: the bigger on top), 9. lean left (same digits placed
+// further left / higher up), 10. ascending Sequences and Ladders. (README numbers them 5-12.)
 // ============================================================
 (function (root) {
   'use strict';
@@ -1855,8 +1856,33 @@
     const x = c[0] !== E ? c[0] : c[1], y = c[2] !== E ? c[2] : c[3];
     return x !== E && y !== E && y === (x + 1) % 10;
   }
+  // New rows (empty before this booking) are interchangeable, but the booking search only
+  // builds one order of them. Put them the way people write them: the row with the most
+  // cells on top, then the one scoring more, then the one leaning left (543_ above _90_ above
+  // 2___ above _2__), using the same empty slots. Same position, so the same value.
+  function orderNewRows(rows, placements) {
+    const per = new Map();
+    for (const p of placements) { const k = p.cat * ROWS + p.row; per.set(k, (per.get(k) || 0) + 1); }
+    const fresh = [...per.keys()].filter(k => dec(rows[k]).filter(x => x !== E).length === per.get(k));
+    if (fresh.length < 2) return { rows, placements };
+    const out = Int16Array.from(rows), move = new Map();
+    for (let cat = 0; cat < 3; cat++) {
+      const slots = fresh.filter(k => Math.floor(k / ROWS) === cat).sort((x, y) => x - y);
+      if (slots.length < 2) continue;
+      // fullest, then highest scoring, then lean left (cells further left: 2___ above _2__)
+      const lefter = (x, y) => { const a = dec(rows[x]), b = dec(rows[y]); for (let c = 0; c < 4; c++) if ((a[c] === E) !== (b[c] === E)) return a[c] === E ? 1 : -1; return 0; };
+      const byFill = slots.slice().sort((x, y) => per.get(y) - per.get(x) || SCORE[cat][rows[y]] - SCORE[cat][rows[x]] || lefter(x, y) || x - y);
+      byFill.forEach((from, i) => { move.set(from, slots[i]); out[slots[i]] = rows[from]; });
+    }
+    if (!move.size) return { rows, placements };
+    return { rows: out, placements: placements.map(p => {
+      const to = move.get(p.cat * ROWS + p.row);
+      return to === undefined ? p : { ...p, row: to - p.cat * ROWS };
+    }) };
+  }
   // tie-break data for one booking (placements as built by forEachBooking with `track`)
-  function candidateOf(rows, placements, bankList, classic) {
+  function candidateOf(rows0, placements0, bankList, classic) {
+    const { rows, placements } = orderNewRows(rows0, placements0);
     const n = placements.length;
     const idxs = assignBankIndices(bankList, placements);
     const cellOrder = placements.map(p => p.cat * 100 + p.row * 10 + p.col).sort((x, y) => x - y);
@@ -1864,14 +1890,16 @@
     for (const r of new Set(placements.filter(p => p.cat === SEQ).map(p => p.row))) if (isAscendingRow(rows[r])) ascending++;
     for (const r of new Set(placements.filter(p => p.cat === LAD).map(p => p.row))) if (isAscendingLadder(rows[LAD * 5 + r])) ascending++;
     const nB = placements.filter(p => p.bonus === 'B').length, nA = placements.filter(p => p.bonus === 'A').length;
-    return { v: null, now: terminalScore(rows, classic), alt: null, n, idxs, nB, nA, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
+    // cells filled in each row afterwards, in reading order (for "fuller rows above")
+    const fill = Array.from(rows, code => dec(code).filter(x => x !== E).length);
+    return { v: null, now: terminalScore(rows, classic), alt: null, n, idxs, nB, nA, fill, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
   }
   function better(a, b) {
     const c = cmp(a.v, b.v);
     if (c !== 0) return c > 0;
     return tieBetter(a, b);
   }
-  // tie-breaks 5-11 only (equal values; item 6 needs .alt filled in on both, see README)
+  // tie-breaks 5-12 only (equal values; item 6 needs .alt filled in on both, see README)
   function tieBetter(a, b) {
     // most points at the end of this round
     if (a.now !== b.now) return a.now > b.now;
@@ -1887,6 +1915,10 @@
     // II-B last (what wins without II-B also wins in Classic)
     if (a.nB !== b.nB) return a.nB < b.nB;
     if (a.nA !== b.nA) return a.nA < b.nA;
+    // fuller rows above: rows compared top to bottom (category by category), the one with
+    // more cells filled wins, so two new rows go in the way people write them (543_ above
+    // _90_ above 2___) instead of whichever happens to start further left
+    if (a.fill && b.fill) for (let i = 0; i < a.fill.length; i++) if (a.fill[i] !== b.fill[i]) return a.fill[i] > b.fill[i];
     // lean left (cells compared in reading order: category, row, column)
     const u = a.cellOrder, w = b.cellOrder;
     for (let i = 0; i < u.length; i++) if (u[i] !== w[i]) return u[i] < w[i];
