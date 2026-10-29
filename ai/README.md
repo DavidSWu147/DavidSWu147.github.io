@@ -166,19 +166,21 @@ Then, when all of the above are equal (bookings only, not before round 10):
 Then, deciding which digits to book:
 
 7. fewest digits booked
-8. avoid the most recently banked digits: compare the latest bank position used,
+8. fewest rows written in: 66__ rather than 6___ and 9___ when both are worth the same
+   (digits kept together are how people book)
+9. avoid the most recently banked digits: compare the latest bank position used,
    then the next latest, and so on.
 
 Finally, with the digits settled, where to put them among equivalent places:
 
-9. ordinary books before Sequence Bonus II-A, and II-B last (a play that wins
+10. ordinary books before Sequence Bonus II-A, and II-B last (a play that wins
    without II-B also wins in Classic, where II-B does not exist).
-10. fuller rows above: comparing rows top to bottom, prefer more cells filled, so when
+11. fuller rows above: comparing rows top to bottom, prefer more cells filled, so when
     a booking starts two new rows the bigger one goes on top (`_90_` above `2___`), and
     the upper of two identical empty rows is used.
-11. lean left: prefer the cells that come first in reading order (category, row,
+12. lean left: prefer the cells that come first in reading order (category, row,
    column), so `890_` beats `_890`.
-12. if still tied (`890_` vs `098_`, `3344` vs `4433`), prefer Sequences and Ladders written
+13. if still tied (`890_` vs `098_`, `3344` vs `4433`), prefer Sequences and Ladders written
     ascending (for Ladders, Y = X + 1 wrapping round: `9900` is ascending, `0099` is not).
 
 Item 6 costs little. In round 9 it only needs the three round-10 category values of

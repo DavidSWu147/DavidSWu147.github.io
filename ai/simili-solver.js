@@ -11,9 +11,9 @@
 //   3. chance of holding a Quad (4-of-a-kind Matching row), win or lose
 //   4. average final score when losing (sum over losing outcomes)
 // Booking tie-breaks (top-level only): 5. most points at the end of this round,
-// 6. fewest digits, 7. avoid the most recently banked digits,
-// 8. fuller rows above (two new rows: the bigger on top), 9. lean left (same digits placed
-// further left / higher up), 10. ascending Sequences and Ladders. (README numbers them 5-12.)
+// 6. fewest digits, 7. fewest rows written in, 8. avoid the most recently banked digits,
+// 9. fuller rows above (two new rows: the bigger on top), 10. lean left (same digits placed
+// further left / higher up), 11. ascending Sequences and Ladders. (README numbers them 5-13.)
 // ============================================================
 (function (root) {
   'use strict';
@@ -1890,16 +1890,18 @@
     for (const r of new Set(placements.filter(p => p.cat === SEQ).map(p => p.row))) if (isAscendingRow(rows[r])) ascending++;
     for (const r of new Set(placements.filter(p => p.cat === LAD).map(p => p.row))) if (isAscendingLadder(rows[LAD * 5 + r])) ascending++;
     const nB = placements.filter(p => p.bonus === 'B').length, nA = placements.filter(p => p.bonus === 'A').length;
+    // rows the booking writes in (fewer: digits kept together, 66__ rather than 6___ + 9___)
+    const nRows = new Set(placements.map(p => p.cat * ROWS + p.row)).size;
     // cells filled in each row afterwards, in reading order (for "fuller rows above")
     const fill = Array.from(rows, code => dec(code).filter(x => x !== E).length);
-    return { v: null, now: terminalScore(rows, classic), alt: null, n, idxs, nB, nA, fill, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
+    return { v: null, now: terminalScore(rows, classic), alt: null, n, nRows, idxs, nB, nA, fill, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
   }
   function better(a, b) {
     const c = cmp(a.v, b.v);
     if (c !== 0) return c > 0;
     return tieBetter(a, b);
   }
-  // tie-breaks 5-12 only (equal values; item 6 needs .alt filled in on both, see README)
+  // tie-breaks 5-13 only (equal values; item 6 needs .alt filled in on both, see README)
   function tieBetter(a, b) {
     // most points at the end of this round
     if (a.now !== b.now) return a.now > b.now;
@@ -1907,6 +1909,8 @@
     // then with its worst (win, then points if win, each)
     if (a.alt && b.alt) for (let i = 0; i < 4; i++) if (a.alt[i] !== b.alt[i]) return a.alt[i] > b.alt[i];
     if (a.n !== b.n) return a.n < b.n;
+    // fewest rows written in
+    if (a.nRows !== undefined && b.nRows !== undefined && a.nRows !== b.nRows) return a.nRows < b.nRows;
     // avoid the most recently banked digits: compare latest bank position used,
     // then the next latest, and so on (smaller wins)
     const x = a.idxs.sorted, y = b.idxs.sorted;

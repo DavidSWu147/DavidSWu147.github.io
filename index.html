@@ -4570,6 +4570,7 @@ window.Simili = function Simili() {
     } = SimiliSolver.fromGame(laxPlacement ? laxPlayerToStrict(start) : start, bank.map(b => b.digit));
     const cat = ['sequence', 'matching', 'ladder'].indexOf(start.chosenCategory);
     setCpuCount(null);
+    const t0 = Date.now();
     startCpu(key, 'booking', computerBooking(state, cat, bankList, TOTAL_ROUNDS - round, classicMode, c => setCpuCount({
       key,
       ...c
@@ -4577,7 +4578,9 @@ window.Simili = function Simili() {
       const n = best.placements.length;
       // Round 8 with Game Hints On: how much of its exact search it got through
       const fmt = x => x.toLocaleString('en-US');
-      const r8 = hintsOn && best.r8 && best.r8.total ? best.r8.how === 'all' ? ` · all ${fmt(best.r8.total)} plays checked` : ` · ${fmt(best.r8.checked)} of ${fmt(best.r8.total)} plays checked in ${R8_COMPUTER_SECONDS}s${best.r8.how === 'network' ? ' (its network\'s pick)' : ''}` : '';
+      // (time taken, then plays checked: shown while it waits for you and with its booking)
+      const secs = Math.round((Date.now() - t0) / 1000);
+      const r8 = hintsOn && best.r8 && best.r8.total ? ` · ${secs}s · ` + (best.r8.how === 'all' ? `all ${fmt(best.r8.total)} plays checked` : `${fmt(best.r8.checked)} of ${fmt(best.r8.total)} plays checked${best.r8.how === 'network' ? ' (its network\'s pick)' : ''}`) : '';
       setCpu({
         key,
         stage: 'ready',
@@ -4585,7 +4588,8 @@ window.Simili = function Simili() {
           ...best,
           note: (n ? `Booked ${n} digit${n > 1 ? 's' : ''}` : 'Booked nothing') + r8
         },
-        start
+        start,
+        r8
       });
       // Round 8: its Round 9 position is known now, so it starts on its Round 9 category while
       // you finish your turn (with you playing too: 4 workers, as many as its Round 8 search just
@@ -4640,7 +4644,7 @@ window.Simili = function Simili() {
     const secs = cpu && cpu.started ? Math.round((Date.now() - cpu.started) / 1000) : 0;
     let status = null;
     if (cpu && cpu.key && cpu.key.startsWith(`${gameNumberRef.current}-${round}-`)) {
-      if (cpu.stage === 'category') status = `Choosing a category… ${secs}s`;else if (cpu.stage === 'booking') status = `Thinking… ${secs}s` + (hintsOn && cpuCount && cpuCount.key === cpu.key && cpuCount.total ? ` · ${cpuCount.checked.toLocaleString('en-US')} of ${cpuCount.total.toLocaleString('en-US')} plays checked` : '');else if (cpu.stage === 'ready') status = 'Decided · end your turn to see its booking';else if (cpu.stage === 'error') status = `Cannot play: ${cpu.message}`;
+      if (cpu.stage === 'category') status = `Choosing a category… ${secs}s`;else if (cpu.stage === 'booking') status = `Thinking… ${secs}s` + (hintsOn && cpuCount && cpuCount.key === cpu.key && cpuCount.total ? ` · ${cpuCount.checked.toLocaleString('en-US')} of ${cpuCount.total.toLocaleString('en-US')} plays checked` : '');else if (cpu.stage === 'ready') status = 'Decided · end your turn to see its booking' + (cpu.r8 || '');else if (cpu.stage === 'error') status = `Cannot play: ${cpu.message}`;
     }
     return {
       status,
