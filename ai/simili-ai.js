@@ -10,6 +10,15 @@
 // The networks are trained backwards (ai/train/train.js): N[2] (start of round 9) on
 // values from the exact solver, then N[3] on one-step look-ahead with N[2], and so on.
 //
+// A model without networks for the start of rounds 1 and 2 (N[10], N[9]: the fresh models
+// of ai/train2, whose openings are fixed rules) plays a fixed opening: Round 1 Matching,
+// booking nothing; Round 2 Matching or Ladder (never Sequence), chosen and booked by
+// look-ahead with N[8] as usual. (A stand-in until the opening policy is chosen.)
+//
+// Lost boards (100 out of reach even with every digit at hand, S.canStillReach100): before
+// Round 9 the computer books nothing (Rounds 9 and 10, two Matching rounds with six books,
+// can still make any Quad an earlier booking could); their value is [0, 0, Quad already held].
+//
 // Works in the browser (window.SimiliAI, after simili-solver.js) and in Node.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory(require('./simili-solver.js'));
@@ -239,13 +248,30 @@
       const v = this.solver.value(makeState(rows, bank, usedA, usedB), 1);
       return [v[0] / 1000, v[1] / 1000 / 150, v[2] / 1000];
     }
-    const pair = this.pair(rows, bank, usedA, usedB, k);
-    const q = (pair[0][2] + pair[1][2]) / 2;
     // 100 out of reach even with every digit at hand (S.canStillReach100): lost for sure,
-    // whatever the network says (it only keeps its Quad estimate)
-    if (!S.canStillReach100(rows, usedA, usedB, k, this.classic)) return [0, 0, q];
-    return [(pair[0][0] + pair[1][0]) / 2, (pair[0][1] + pair[1][1]) / 2, q];
+    // whatever the network says (the fresh networks never see such boards)
+    if (!S.canStillReach100(rows, usedA, usedB, k, this.classic)) return lostValue(rows);
+    const pair = this.pair(rows, bank, usedA, usedB, k);
+    return [(pair[0][0] + pair[1][0]) / 2, (pair[0][1] + pair[1][1]) / 2, (pair[0][2] + pair[1][2]) / 2];
   };
+  // Matching rows X__X and XX_X (or X_XX) are never worth booking under Strict Placement:
+  // the same digits from the same row make XX__ / XXX_ instead, which does everything they
+  // do and scores at least as much. Bookings that make one are skipped (the fresh networks
+  // never see such rows, so their estimates of them would be guesses).
+  const SUBOPT = new Uint8Array(LEGAL[MAT].length);
+  for (let code = 0; code < SUBOPT.length; code++) {
+    if (!LEGAL[MAT][code]) continue;
+    const f = S.dec(code).map(x => x !== S.E);
+    const n = f.filter(Boolean).length;
+    if ((n === 2 && f[0] && f[3]) || (n === 3 && f[0] && f[3])) SUBOPT[code] = 1;
+  }
+  const nSub = rows => { let n = 0; for (let i = MAT * ROWS; i < MAT * ROWS + ROWS; i++) n += SUBOPT[rows[i]]; return n; };
+  // a lost board: no win; the Quad only if it is already there
+  const lostValue = rows => [0, 0, hasQuad(rows) ? 1 : 0];
+  // fixed opening (no network for the start of Round 2, see the top)
+  Player.prototype.fixedOpening = function () { return !this.nets[9]; };
+  // the booking "nothing" in the form bookingShortlist / chooseBooking return
+  const NOTHING = v => ({ u: utility(v), v, cand: { placements: [], n: 0 } });
   // Both networks' estimates (the same one twice if there is only one).
   // base (optional, from baseFor): the other categories' rows already added in.
   Player.prototype.pair = function (rows, bank, usedA, usedB, k, base) {
@@ -305,9 +331,14 @@
     const base = k - 1 >= 2 ? this.baseFor(st.rows, cat, k - 1) : null;
     // a free book may change another category: then no shortcut
     const baseOf = (uA, uB) => (uA === st.usedA && uB === st.usedB ? base : null);
+    // lost positions get lostValue, not the network's estimate
+    const lost = (rows, uA, uB) => !S.canStillReach100(rows, uA, uB, k - 1, this.classic);
+    const sub0 = nSub(st.rows);
     if (double && k - 1 >= 2) {
       let ua = -Infinity, ub = -Infinity, va = null, vb = null;
       this.solver.forEachBooking(st, cat, bank, false, false, (rows, bk, uA, uB) => {
+        if (nSub(rows) > sub0) return;
+        if (lost(rows, uA, uB)) { const v = lostValue(rows), x = utility(v); if (x > ua) { ua = x; va = v; } if (x > ub) { ub = x; vb = v; } return; }
         const [a, b] = this.pair(rows, bk, uA, uB, k - 1, baseOf(uA, uB));
         const x = utility(a), y = utility(b);
         if (x > ua) { ua = x; va = b; }
@@ -317,8 +348,10 @@
     }
     let best = null, bu = -Infinity;
     this.solver.forEachBooking(st, cat, bank, false, false, (rows, bk, uA, uB) => {
+      if (nSub(rows) > sub0) return;
       let v;
-      if (k - 1 >= 2) { const [a, b] = this.pair(rows, bk, uA, uB, k - 1, baseOf(uA, uB)); v = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]; }
+      if (k - 1 >= 2 && lost(rows, uA, uB)) v = lostValue(rows);
+      else if (k - 1 >= 2) { const [a, b] = this.pair(rows, bk, uA, uB, k - 1, baseOf(uA, uB)); v = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]; }
       else v = this.value(rows, bk, uA, uB, k - 1);
       const u = utility(v);
       if (u > bu) { bu = u; best = v; }
@@ -328,11 +361,16 @@
   // Expected value of each category at the start of a round (k rounds left), over the
   // given rolls (default: all 220, weighted; or an array of digit triples, equally weighted).
   // cats: only these categories (default all three), in that order.
+  // Fixed opening: categories it never calls get [-1, 0, 0] (never picked), Round 1 Matching [0, 0, 0].
   Player.prototype.categoryValues = function (st, k, rolls, double, cats) {
     const list = rolls ? rolls.map(d => ({ digits: d, w: 1 })) : ROLLS;
     const tot = list.reduce((a, r) => a + r.w, 0);
     const bank = new Int8Array(10), out = [];
     for (const cat of cats || [0, 1, 2]) {
+      if (k >= 9 && this.fixedOpening()) {
+        if (k >= 10) { out.push([cat === MAT ? 0 : -1, 0, 0]); continue; }
+        if (cat === SEQ) { out.push([-1, 0, 0]); continue; }
+      }
       const acc = [0, 0, 0];
       for (const r of list) {
         bank.set(st.bank); for (const d of r.digits) bank[d]++;
@@ -380,6 +418,8 @@
   };
   Player.prototype.chooseBooking = function (st, cat, bankList, k, recheck) {
     if (k <= 2) return this.solver.bestBooking(st, cat, bankList, k);
+    const fixed = this.nothingHere(st, k);
+    if (fixed) return this.bookingResult(fixed);
     const top = recheck && recheck.top > 1 ? recheck.top : 1;
     const sl = this.bookingShortlist(st, cat, bankList, k, top);
     if (sl.best) return this.bookingResult(sl.best);
@@ -395,13 +435,22 @@
   //    { best } when there is nothing to re-check (top <= 1 or a single option); else
   //    { list }: the `top` best estimates, and the margin's choice among the near-best if it
   //    is not one of them. Each item: { u, v, cand, rows, bk, uA, uB }.
+  // Book nothing (Rounds 1-8): on a lost board, and in Round 1 of the fixed opening.
+  Player.prototype.nothingHere = function (st, k) {
+    if (k >= 3 && !S.canStillReach100(st.rows, st.usedA, st.usedB, k, this.classic)) return NOTHING(lostValue(st.rows));
+    if (k >= 10 && this.fixedOpening()) return NOTHING([0, 0, 0]);
+    return null;
+  };
   Player.prototype.bookingShortlist = function (st, cat, bankList, k, top) {
+    const fixed = this.nothingHere(st, k);
+    if (fixed) return { best: fixed };
     const bank = new Int8Array(10);
     for (const b of bankList) if (!b.used) bank[b.digit]++;
     this.frame = canonicalize(st.rows, bank);     // one renaming for all options (see bestAfterRoll)
     // every position the booking can lead to, once (equivalent bookings: the tie-breaks' choice)
-    const byKey = new Map();
+    const byKey = new Map(), sub0 = nSub(st.rows);
     this.solver.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
+      if (nSub(rows) > sub0) return;
       const key = this.solver.key(rows, bk, uA, uB, k - 1);
       const cand = S.candidateOf(rows, placements, bankList, this.classic);
       const old = byKey.get(key);
@@ -446,8 +495,9 @@
     const bank = new Int8Array(10);
     for (const b of bankList) if (!b.used) bank[b.digit]++;
     this.frame = canonicalize(st.rows, bank);
-    const seen = new Map();
+    const seen = new Map(), sub0 = nSub(st.rows);
     this.solver.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
+      if (nSub(rows) > sub0) return;
       const key = this.solver.key(rows, bk, uA, uB, k - 1);
       if (seen.has(key)) return;
       seen.set(key, { u: utility(this.value(rows, bk, uA, uB, k - 1)), placements: placements.map(p => ({ ...p })) });
