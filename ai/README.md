@@ -166,8 +166,8 @@ Then, when all of the above are equal (bookings only, not before round 10):
 Then, deciding which digits to book:
 
 7. fewest digits booked
-8. fewest rows written in: 66__ rather than 6___ and 9___ when both are worth the same
-   (digits kept together are how people book)
+8. fewest new rows started (rows that were empty before the booking), so more of the grid
+   stays open: 6_7_ rather than 6___ and 9___ when both are worth the same
 9. avoid the most recently banked digits: compare the latest bank position used,
    then the next latest, and so on.
 

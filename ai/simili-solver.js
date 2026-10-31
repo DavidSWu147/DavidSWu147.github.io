@@ -11,7 +11,7 @@
 //   3. chance of holding a Quad (4-of-a-kind Matching row), win or lose
 //   4. average final score when losing (sum over losing outcomes)
 // Booking tie-breaks (top-level only): 5. most points at the end of this round,
-// 6. fewest digits, 7. fewest rows written in, 8. avoid the most recently banked digits,
+// 6. fewest digits, 7. fewest new rows started, 8. avoid the most recently banked digits,
 // 9. fuller rows above (two new rows: the bigger on top), 10. lean left (same digits placed
 // further left / higher up), 11. ascending Sequences and Ladders. (README numbers them 5-13.)
 // ============================================================
@@ -263,7 +263,8 @@
   // winnable position lost: each row needs only cells (any digits), a round gives 3 cells
   // in its category (4 in Sequence once Bonus I is active; the first Sequence round only 3
   // if it is not yet), each free book still to come (II-A once 5 Sequence rows score 10+,
-  // II-B in Modern once 4 score 15) one cell anywhere, at any time, and Bonus III +5.
+  // II-B in Modern once 4 score 15) one cell anywhere, at any time (but at most one of
+  // the two outside Sequence, as in the game), and Bonus III +5.
   // reachBest[cat][code * 5 + c]: the best score this row can reach with c more cells
   const reachBest = [0, 1, 2].map(() => new Int8Array(NCODES * 5).fill(-1));
   function rowReach(cat, code, c) {
@@ -391,6 +392,7 @@
         const free = (usedA === 0 && a >= 5 ? 1 : 0) + (!classic && usedB === 0 && c >= 4 ? 1 : 0);
         for (let fSn = 0; fSn <= free && !ok; fSn++) for (let fMn = 0; fMn <= free - fSn && !ok; fMn++) {
           const fLn = free - fSn - fMn;
+          if (fMn + fLn > 1) continue;   // at most one free book outside Sequence
           const sg = fS[(cS + fSn) * 36 + a * 6 + c];
           if (sg <= NEG) continue;
           for (const mAll of [0, 5]) for (const lAll of [0, 5]) {
@@ -1890,11 +1892,15 @@
     for (const r of new Set(placements.filter(p => p.cat === SEQ).map(p => p.row))) if (isAscendingRow(rows[r])) ascending++;
     for (const r of new Set(placements.filter(p => p.cat === LAD).map(p => p.row))) if (isAscendingLadder(rows[LAD * 5 + r])) ascending++;
     const nB = placements.filter(p => p.bonus === 'B').length, nA = placements.filter(p => p.bonus === 'A').length;
-    // rows the booking writes in (fewer: digits kept together, 66__ rather than 6___ + 9___)
-    const nRows = new Set(placements.map(p => p.cat * ROWS + p.row)).size;
+    // new rows started (rows empty before this booking): fewer keeps more of the grid open,
+    // so 6_7_ rather than 6___ + 9___
+    const perRow = new Map();
+    for (const p of placements) { const k = p.cat * ROWS + p.row; perRow.set(k, (perRow.get(k) || 0) + 1); }
+    let nNew = 0;
+    for (const [k, c] of perRow) if (dec(rows[k]).filter(x => x !== E).length === c) nNew++;
     // cells filled in each row afterwards, in reading order (for "fuller rows above")
     const fill = Array.from(rows, code => dec(code).filter(x => x !== E).length);
-    return { v: null, now: terminalScore(rows, classic), alt: null, n, nRows, idxs, nB, nA, fill, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
+    return { v: null, now: terminalScore(rows, classic), alt: null, n, nNew, idxs, nB, nA, fill, cellOrder, ascending, placements: placements.map((p, k) => ({ ...p, bankIdx: idxs.byPlacement[k] })) };
   }
   function better(a, b) {
     const c = cmp(a.v, b.v);
@@ -1909,8 +1915,8 @@
     // then with its worst (win, then points if win, each)
     if (a.alt && b.alt) for (let i = 0; i < 4; i++) if (a.alt[i] !== b.alt[i]) return a.alt[i] > b.alt[i];
     if (a.n !== b.n) return a.n < b.n;
-    // fewest rows written in
-    if (a.nRows !== undefined && b.nRows !== undefined && a.nRows !== b.nRows) return a.nRows < b.nRows;
+    // fewest new rows started (more empty rows kept)
+    if (a.nNew !== undefined && b.nNew !== undefined && a.nNew !== b.nNew) return a.nNew < b.nNew;
     // avoid the most recently banked digits: compare latest bank position used,
     // then the next latest, and so on (smaller wins)
     const x = a.idxs.sorted, y = b.idxs.sorted;
