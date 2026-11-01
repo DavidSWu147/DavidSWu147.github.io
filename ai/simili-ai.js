@@ -13,7 +13,10 @@
 // A model without networks for the start of rounds 1 and 2 (N[10], N[9]: the fresh models
 // of ai/train2, whose openings are fixed rules) plays a fixed opening: Round 1 Matching,
 // booking nothing; Round 2 Matching or Ladder (never Sequence), chosen and booked by
-// look-ahead with N[8] as usual. (A stand-in until the opening policy is chosen.)
+// look-ahead with N[8] as usual, among the bookings every opening policy may make: in
+// Matching nothing, a Triple, or the Quad on Round 1's Triple; in Ladder nothing, or one pair
+// of a complete Ladder (XXYY, Y = X+-1) held in the six digits. (A stand-in until the opening
+// policy is chosen.)
 //
 // Lost boards (100 out of reach even with every digit at hand, S.canStillReach100): before
 // Round 9 the computer books nothing (Rounds 9 and 10, two Matching rounds with six books,
@@ -270,6 +273,25 @@
   const lostValue = rows => [0, 0, hasQuad(rows) ? 1 : 0];
   // fixed opening (no network for the start of Round 2, see the top)
   Player.prototype.fixedOpening = function () { return !this.nets[9]; };
+  // Round 2 of the fixed opening: may `rows` follow from `before` with the six digits `bank`
+  // (roll included)? See the top.
+  function openingAllowed(before, rows, bank) {
+    let changed = -1;
+    for (let i = 0; i < 3 * ROWS; i++) if (rows[i] !== before[i]) { if (changed >= 0) return false; changed = i; }
+    if (changed < 0) return true;
+    const a = S.dec(before[changed]), b = S.dec(rows[changed]);
+    const fa = a.filter(x => x !== S.E), fb = b.filter(x => x !== S.E);
+    if (changed >= MAT * ROWS && changed < MAT * ROWS + ROWS) {
+      // the Quad on a Triple, or a new Triple (three in a row: XXX_ or _XXX)
+      if (fa.length === 3 && fb.length === 4) return true;
+      return fa.length === 0 && fb.length === 3 && SCORE[MAT][rows[changed]] === 15;
+    }
+    if (changed >= LAD * ROWS && fa.length === 0 && fb.length === 2 && fb[0] === fb[1] && (b[0] === b[1] || b[2] === b[3])) {
+      const d = fb[0];
+      return bank[d] >= 2 && (bank[(d + 1) % 10] >= 2 || bank[(d + 9) % 10] >= 2);
+    }
+    return false;
+  }
   // the booking "nothing" in the form bookingShortlist / chooseBooking return
   const NOTHING = v => ({ u: utility(v), v, cand: { placements: [], n: 0 } });
   // Both networks' estimates (the same one twice if there is only one).
@@ -334,10 +356,12 @@
     // lost positions get lostValue, not the network's estimate
     const lost = (rows, uA, uB) => !S.canStillReach100(rows, uA, uB, k - 1, this.classic);
     const sub0 = nSub(st.rows);
+    const opening = k === 9 && this.fixedOpening();
+    const okOpening = rows => !opening || openingAllowed(st.rows, rows, bank);
     if (double && k - 1 >= 2) {
       let ua = -Infinity, ub = -Infinity, va = null, vb = null;
       this.solver.forEachBooking(st, cat, bank, false, false, (rows, bk, uA, uB) => {
-        if (nSub(rows) > sub0) return;
+        if (nSub(rows) > sub0 || !okOpening(rows)) return;
         if (lost(rows, uA, uB)) { const v = lostValue(rows), x = utility(v); if (x > ua) { ua = x; va = v; } if (x > ub) { ub = x; vb = v; } return; }
         const [a, b] = this.pair(rows, bk, uA, uB, k - 1, baseOf(uA, uB));
         const x = utility(a), y = utility(b);
@@ -348,7 +372,7 @@
     }
     let best = null, bu = -Infinity;
     this.solver.forEachBooking(st, cat, bank, false, false, (rows, bk, uA, uB) => {
-      if (nSub(rows) > sub0) return;
+      if (nSub(rows) > sub0 || !okOpening(rows)) return;
       let v;
       if (k - 1 >= 2 && lost(rows, uA, uB)) v = lostValue(rows);
       else if (k - 1 >= 2) { const [a, b] = this.pair(rows, bk, uA, uB, k - 1, baseOf(uA, uB)); v = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]; }
@@ -449,8 +473,10 @@
     this.frame = canonicalize(st.rows, bank);     // one renaming for all options (see bestAfterRoll)
     // every position the booking can lead to, once (equivalent bookings: the tie-breaks' choice)
     const byKey = new Map(), sub0 = nSub(st.rows);
+    const opening = k === 9 && this.fixedOpening();
     this.solver.forEachBooking(st, cat, bank, false, true, (rows, bk, uA, uB, nMain, placements) => {
       if (nSub(rows) > sub0) return;
+      if (opening && !openingAllowed(st.rows, rows, bank)) return;
       const key = this.solver.key(rows, bk, uA, uB, k - 1);
       const cand = S.candidateOf(rows, placements, bankList, this.classic);
       const old = byKey.get(key);
